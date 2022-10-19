@@ -7,10 +7,11 @@
 import numpy as np
 import pyemma
 import matplotlib.pyplot as plt
+import numpy.typing as npt
 
 
 class MSM:
-    def __init__(self, state_centers):
+    def __init__(self, state_centers: npt.NDArray[np.float64]):
         self.state_centers = state_centers
         self.number_of_states = len(state_centers)
         self.sorted_state_centers = np.sort(state_centers)
@@ -20,18 +21,16 @@ class MSM:
         self.time_step = None
         self.discrete_trajectory = None
 
-    def compute_states_for_range(self, given_range):
+    def compute_states_for_range(self, lower_value: float, upper_value: float):
         state_boundaries = [
             (self.sorted_state_centers[i + 1] + self.sorted_state_centers[i]) / 2
             for i in range(len(self.sorted_state_centers) - 1)
         ]
-        lower_value = given_range[0]
-        higher_value = given_range[1]
         number_of_lower_states = len(
             [boundary for boundary in state_boundaries if boundary < lower_value]
         )
         number_of_upper_states = len(
-            [boundary for boundary in state_boundaries if boundary > higher_value]
+            [boundary for boundary in state_boundaries if boundary > upper_value]
         )
 
         lower_state_index = number_of_lower_states
@@ -51,23 +50,23 @@ class MSM:
 
         return diffusion_coeff_domain
 
-    def set_stationary_distribution(self, stationary_distribution):
+    def set_stationary_distribution(self, stationary_distribution: np.array):
         self.stationary_distribution = stationary_distribution
 
-    def set_transition_matrix(self, transition_matrix):
+    def set_transition_matrix(self, transition_matrix: np.array):
         assert transition_matrix.shape[0] == len(self.sorted_state_centers)
         self.transition_matrix = transition_matrix
 
-    def set_lag(self, lag):
+    def set_lag(self, lag: int):
         self.lag = lag
 
-    def set_time_step(self, time_step):
+    def set_time_step(self, time_step: float):
         self.time_step = time_step
 
-    def set_discrete_trajectory(self, discrete_traj):
+    def set_discrete_trajectory(self, discrete_traj: npt.NDArray[np.int]):
         self.discrete_trajectory = discrete_traj
 
-    def calculate_correlation_coefficient(self, n):
+    def calculate_correlation_coefficient(self, n: int):
         assert self.transition_matrix is not None
         return np.sum(
             [
@@ -78,7 +77,7 @@ class MSM:
             axis=0,
         )
 
-    def relabel_trajectory_by_coordinate_chronology(self, traj):
+    def relabel_trajectory_by_coordinate_chronology(self, traj: npt.NDArray[np.int]):
         sorted_indices = np.argsort(np.argsort(self.state_centers))
 
         # relabel states in trajectory
@@ -87,7 +86,7 @@ class MSM:
 
         return traj
 
-    def compute_diffusion_coefficient(self, time_step, lag):
+    def compute_diffusion_coefficient(self, time_step: float, lag: int):
         tau = lag * time_step
         print(tau, type(tau))
         c1 = self.calculate_correlation_coefficient(n=1)

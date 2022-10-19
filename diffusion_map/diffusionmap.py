@@ -1,17 +1,22 @@
 """
 .. module:: diffusionmap
 This module allows computation of the diffusionmaps.
-.. moduleauthor:: ZofiaTr
+
+Author: ZofiaTr
+Edits: Dominic Phillips
+Original module: https://github.com/ZofiaTr/mdfeature
 """
+
+import subprocess
+import time
 
 from openmm import *
 from openmm.app import *
 from simtk.unit import *
 from matplotlib.pyplot import cm
 import mdtraj as md
-import time
 import numpy as np
-import subprocess
+
 from openmmtools.constants import kB
 from sklearn.neighbors import KernelDensity
 

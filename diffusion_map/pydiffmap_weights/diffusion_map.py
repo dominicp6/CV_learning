@@ -5,6 +5,7 @@ Routines and Class definitions for the diffusion maps algorithm.
 from __future__ import absolute_import
 from abc import ABC, abstractmethod
 
+
 class DiffusionMap(ABC):
     """
     Diffusion Map base class.
@@ -23,7 +24,9 @@ class DiffusionMap(ABC):
         Optional parameters required for the metric given.
     """
 
-    def __init__(self, alpha=0.5, k=64, epsilon='bgh', metric='euclidean', metric_params=None):
+    def __init__(
+        self, alpha=0.5, k=64, epsilon="bgh", metric="euclidean", metric_params=None
+    ):
         """
         Initializes Diffusion Map, sets parameters.
         """
@@ -40,5 +43,3 @@ class DiffusionMap(ABC):
     @abstractmethod
     def fit_transform(self, X):
         pass
-
-

@@ -8,7 +8,7 @@
 import autograd.numpy as np
 
 
-def cart2pol(x, y):
+def cart2pol(x: float, y: float) -> (float, float):
     r = np.sqrt(x**2 + y**2)
     theta = np.arctan2(y, x)
 
@@ -16,19 +16,19 @@ def cart2pol(x, y):
 
 
 # Shallow well (1D)
-def shallow_well_potential(x):
+def shallow_well_potential(x: float) -> float:
     return 0.01 * x**2
 
 
 # Double well (1D)
-def double_well_potential(x):
+def double_well_potential(x: float) -> float:
     h = 2
     c = 2
     return -(1 / 4) * (x**2) * (h**4) + (1 / 2) * (c**2) * (x**4)
 
 
 # Quadruple Well (2D)
-def quadruple_well_potential(x):
+def quadruple_well_potential(x: np.array) -> float:
     h = 2
     c = 2
     return (-(1 / 4) * (x[0] ** 2) * (h**4) + (1 / 2) * (c**2) * (x[0] ** 4)) + (
@@ -37,7 +37,7 @@ def quadruple_well_potential(x):
 
 
 # Ring Double Well (2D)
-def ring_double_well_potential(x):
+def ring_double_well_potential(x: np.array) -> float:
     theta0 = np.pi
     r0 = 1
     w = 0.2
@@ -56,12 +56,12 @@ def ring_double_well_potential(x):
 
 
 # Moro-Cardin potential (2D)
-def moro_cardin_potential(x):
+def moro_cardin_potential(x: np.array) -> float:
     return 5 * (x[0] ** 2 - 1) ** 2 + 10 * np.arctan(7 * np.pi / 9) * x[1] ** 2
 
 
 # Muller-Brown Potential (2D)
-def muller_brown_potential(x):
+def muller_brown_potential(x: np.array) -> float:
     A = (-200, -100, -170, 15)
     a = (-1, -1, -6.5, 0.7)
     b = (0, 0, 11, 0.6)

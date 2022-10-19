@@ -5,22 +5,28 @@
    Author: Dominic Phillips (dominicp6)
 """
 
-import numpy as np
-import warnings
-import pandas as pd
-import pyemma
 
+import warnings
+from typing import Optional, Union
+
+import pandas as pd
+import numpy as np
+import pyemma
 from autoimpute.imputations import MiceImputer
 from itertools import permutations
+from pyemma.coordinates.clustering import RegularSpaceClustering, KmeansClustering
+import matplotlib as plt
 
 from MarkovStateModel import MSM
 import diffusion_utils as utl
 import plot_utils as pltutl
 import general_utils as gutl
 
+type_kramers_rates = list[tuple[tuple[int, int], float]]
 
 class KramersRateEvaluator:
-    def __init__(self, verbose=True, default_clustering=None):
+    # TODO: type of default clustering
+    def __init__(self, verbose: bool = True, default_clustering=None):
         self.verbose = verbose
         self.imputer = MiceImputer(strategy={"F": "interpolate"}, n=1, return_list=True)
         self.default_clustering = default_clustering
@@ -31,8 +37,13 @@ class KramersRateEvaluator:
         )
 
     def _compute_free_energy(
-        self, time_series, beta, bins=200, impute=True, minimum_counts=25
-    ):
+        self,
+        time_series: np.array,
+        beta: float,
+        bins: int = 200,
+        impute: bool = True,
+        minimum_counts: int = 25,
+    ) -> None:
         counts, coordinates = np.histogram(time_series, bins=bins)
         coordinates = coordinates[:-1]
         with np.errstate(divide="ignore"):
@@ -66,8 +77,13 @@ class KramersRateEvaluator:
         self.free_energy = free_energy - np.min(free_energy)
 
     def _fit_msm(
-        self, time_series, time_step, lag, cluster_type="kmeans", options=None
-    ):
+        self,
+        time_series: np.array,
+        time_step: float,
+        lag: int,
+        cluster_type: str = "kmeans",
+        options: Optional[dict] = None,
+    ) -> Union[RegularSpaceClustering, KmeansClustering]:
 
         if options["dmin"] is None:
             options["dmin"] = min(
@@ -121,7 +137,7 @@ class KramersRateEvaluator:
         prominence: float,
         endpoint_minima: bool,
         high_energy_minima: bool,
-    ):
+    ) -> type_kramers_rates:
         # 1) Compute and plot minima of the free energy landscape
         free_energy_minima = pltutl.get_minima(
             self.smoothed_F, prominence, endpoint_minima, high_energy_minima
@@ -137,7 +153,7 @@ class KramersRateEvaluator:
 
         # 2) Compute the Kramer's transition rates between every possible pair of minima
         kramers_rates = []
-        possible_transitions = permutations(range(len(free_energy_minima)), 2)
+        possible_transitions: iter(tuple[int, int]) = permutations(range(len(free_energy_minima)), 2)
         for transition in possible_transitions:
             kramers_rate = utl.compute_kramers_rate(
                 transition,
@@ -153,24 +169,60 @@ class KramersRateEvaluator:
 
         return kramers_rates
 
+    def plot_free_energy_landscape(self):
+        fig = plt.figure(figsize=(15, 7))
+        ax1 = plt.subplot()
+
+        # Diffusion curve
+        (l1,) = ax1.plot(self.smoothed_D_domain, self.smoothed_D, color="red")
+        ax1.set_ylim(
+            (
+                min(self.smoothed_D) - 0.2 * (max(self.smoothed_D) - min(self.smoothed_D)),
+                max(self.smoothed_D) + 0.1 * (max(self.smoothed_D) - min(self.smoothed_D)),
+            )
+        )
+
+        # Free energy curve
+        ax2 = ax1.twinx()
+        (l2,) = ax2.plot(self.coordinates, self.smoothed_F, color="k")
+        digit_width = pltutl.get_digit_text_width(fig, ax2)
+        plt.legend([l1, l2], ["diffusion_coefficient", "free_energy"])
+
+        print(f"Free energy profile suggests {len(self.free_energy_minima)} minima.")
+        pltutl.plot_minima(self.free_energy_minima, self.smoothed_F)
+        state_boundaries = pltutl.display_state_boundaries(self.msm, self.smoothed_F)
+        if len(state_boundaries) < 50:
+            pltutl.display_state_numbers(
+                state_boundaries, self.coordinates, self.smoothed_F, digit_width
+            )
+
+        ax1.set_xlabel("Q", fontsize=16)
+        ax1.set_ylabel(r"Diffusion Coefficient $D^{(2)}(Q)$ ($Q^2 / s$)", fontsize=18)
+        ax2.set_ylabel(r"$\mathcal{F}$ ($kJ/mol$)", fontsize=18)
+        plt.xticks(fontsize=14)
+        plt.yticks(fontsize=14)
+        # plt.title('Free Energy Landscape', fontsize=16)
+        plt.savefig("free_energy_landscape.pdf")
+        plt.show()
+
     def fit(
         self,
         trajectory,
-        beta,
-        time_step,
-        lag,
-        sigmaD,
-        sigmaF,
-        minimum_counts=25,
-        bins=200,
-        impute_free_energy_nans=True,
-        cluster_type="kmeans",
-        k=10,
-        ignore_high_energy_minima=False,
-        include_endpoint_minima=True,
-        minima_prominence=1.5,
-        options=None,
-    ):
+        beta: float,
+        time_step: float,
+        lag: int,
+        sigmaD: float,
+        sigmaF: float,
+        minimum_counts: int = 25,
+        bins: int = 200,
+        impute_free_energy_nans: bool = True,
+        cluster_type: str = "kmeans",
+        k: int = 10,
+        ignore_high_energy_minima: bool = False,
+        include_endpoint_minima: bool = True,
+        minima_prominence: float = 1.5,
+        options: Optional[dict] = None,
+    ) -> type_kramers_rates:
 
         if options is None:
             options = {

@@ -7,6 +7,7 @@ from __future__ import absolute_import
 import numpy as np
 import scipy.sparse as sps
 import scipy.sparse.linalg as spsl
+
 from . import kernel
 from .diffusion_map import DiffusionMap
 
@@ -44,7 +45,19 @@ class TMDmap_Explicit_Weights(DiffusionMap):
 
     """
 
-    def __init__(self, alpha=0.5, k=64, kernel_type='gaussian', epsilon='bgh', n_evecs=1, neighbor_params=None, metric='euclidean', metric_params=None, explicit_dentity=None, nearest_neighbors_algo='knearest'):
+    def __init__(
+        self,
+        alpha=0.5,
+        k=64,
+        kernel_type="gaussian",
+        epsilon="bgh",
+        n_evecs=1,
+        neighbor_params=None,
+        metric="euclidean",
+        metric_params=None,
+        explicit_dentity=None,
+        nearest_neighbors_algo="knearest",
+    ):
         """
         Initializes Diffusion Map, sets parameters.
         """
@@ -58,9 +71,15 @@ class TMDmap_Explicit_Weights(DiffusionMap):
         self.nearest_neighbors_algo = nearest_neighbors_algo
 
     def _compute_kernel(self, X):
-        my_kernel = kernel.Kernel(kernel_type=self.kernel_type, k=self.k,
-                                  epsilon=self.epsilon, neighbor_params=self.neighbor_params,
-                                  metric=self.metric, metric_params=self.metric_params, nearest_neighbors_algo=self.nearest_neighbors_algo)
+        my_kernel = kernel.Kernel(
+            kernel_type=self.kernel_type,
+            k=self.k,
+            epsilon=self.epsilon,
+            neighbor_params=self.neighbor_params,
+            metric=self.metric,
+            metric_params=self.metric_params,
+            nearest_neighbors_algo=self.nearest_neighbors_algo,
+        )
         my_kernel.fit(X)
         kernel_matrix = _symmetrize_matrix(my_kernel.compute(X))
         return kernel_matrix, my_kernel
@@ -91,7 +110,7 @@ class TMDmap_Explicit_Weights(DiffusionMap):
         return P
 
     def _make_diffusion_coords(self, P):
-        evals, evecs = spsl.eigs(P, k=(self.n_evecs+1), which='LM')
+        evals, evecs = spsl.eigs(P, k=(self.n_evecs + 1), which="LM")
         ix = evals.argsort()[::-1][1:]
         evals = np.real(evals[ix])
         evecs = np.real(evecs[:, ix])
@@ -153,7 +172,7 @@ class TMDmap_Explicit_Weights(DiffusionMap):
             return self.dmap
         else:
             # turn x into array if needed
-            if (Y.ndim == 1):
+            if Y.ndim == 1:
                 Y = Y[np.newaxis, :]
             # compute the values of the kernel matrix
             kernel_extended = self.local_kernel.compute(Y)
@@ -180,7 +199,7 @@ class TMDmap_Explicit_Weights(DiffusionMap):
         return self.dmap
 
 
-def _symmetrize_matrix(K, mode='average'):
+def _symmetrize_matrix(K, mode="average"):
     """
     Symmetrizes a sparse kernel matrix.
 
@@ -197,23 +216,22 @@ def _symmetrize_matrix(K, mode='average'):
         Symmetrized kernel matrix.
     """
 
-    if mode == 'average':
-        return 0.5*(K + K.transpose())
-    elif mode == 'or':
+    if mode == "average":
+        return 0.5 * (K + K.transpose())
+    elif mode == "or":
         Ktrans = K.transpose()
         dK = abs(K - Ktrans)
         K = K + Ktrans
         K = K + dK
-        return 0.5*K
-    elif mode == 'and':
+        return 0.5 * K
+    elif mode == "and":
         Ktrans = K.transpose()
         dK = abs(K - Ktrans)
         K = K + Ktrans
         K = K - dK
-        return 0.5*K
+        return 0.5 * K
     else:
-        raise ValueError('Did not understand symmetrization method')
-
+        raise ValueError("Did not understand symmetrization method")
 
 
 # class DiffusionMap(object):

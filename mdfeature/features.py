@@ -4,7 +4,10 @@ This module contains functions facilitating feature selection.
 
 Author: ZofiaTr
 Edits: Dominic Phillips (dominicp6)
+Original Module: https://github.com/ZofiaTr/mdfeature
 """
+
+from itertools import combinations
 
 from openmm import *
 from openmm.app import *
@@ -13,7 +16,6 @@ from matplotlib.pyplot import cm
 import mdtraj as md
 import numpy as np
 from scipy import stats
-from itertools import combinations
 from tqdm import tqdm
 
 from mdfeature.utils import remove_corresponding_entries_with_nans

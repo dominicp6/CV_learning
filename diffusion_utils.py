@@ -5,16 +5,23 @@
    Author: Dominic Phillips (dominicp6)
 """
 
+from typing import Callable, Union
+
 import numpy as np
 import pyemma
 import matplotlib.pyplot as plt
 import scipy.integrate as integrate
+from autograd import grad
+import numpy.typing as npt
+from pyemma.coordinates.clustering import RegularSpaceClustering, KmeansClustering
+
 from MarkovStateModel import MSM
 import general_utils as gutl
-from autograd import grad
 
-
-def implied_timescale_analysis(discrete_traj, lags, axs):
+# TODO: axs type
+def implied_timescale_analysis(
+    discrete_traj: npt.NDArray[np.int], lags: npt.NDArray[np.int], axs
+) -> None:
     its = pyemma.msm.its(
         discrete_traj, lags=lags, nits=10, reversible=True, connected=True
     )
@@ -23,8 +30,12 @@ def implied_timescale_analysis(discrete_traj, lags, axs):
 
 
 def diffusion_coefficient_sensitivity_analysis(
-    cluster_centers, discrete_traj, lags, time_step, axs
-):
+    cluster_centers: npt.NDArray[np.float64],
+    discrete_traj: npt.NDArray[np.int],
+    lags: npt.NDArray[np.int],
+    time_step: float,
+    axs,
+) -> None:
     msm = MSM(cluster_centers)
     old_D = None
     diffs = []
@@ -80,7 +91,11 @@ def diffusion_coefficient_sensitivity_analysis(
     plt.show()
 
 
-def lag_sensitivity_analysis(discrete_traj, cluster_centers, time_step):
+def lag_sensitivity_analysis(
+    discrete_traj: npt.NDArray[np.int],
+    cluster_centers: npt.NDArray[np.float64],
+    time_step: float,
+) -> None:
     fig, axs = plt.subplots(2, 2)
     fig.set_size_inches(16, 12)
     lags = [1, 2, 3, 5, 10, 15, 20, 30, 50, 75, 100]
@@ -90,7 +105,9 @@ def lag_sensitivity_analysis(discrete_traj, cluster_centers, time_step):
     )
 
 
-def cluster_time_series(time_series, cluster_type, options):
+def cluster_time_series(
+    time_series: np.array, cluster_type: str, options: dict
+) -> Union[RegularSpaceClustering, KmeansClustering]:
     if cluster_type == "kmeans":
         cluster = pyemma.coordinates.cluster_kmeans(
             time_series,
@@ -108,11 +125,15 @@ def cluster_time_series(time_series, cluster_type, options):
     return cluster
 
 
-def compute_well_integrand(free_energy, beta):
+# TODO: np
+def compute_well_integrand(free_energy: np.array, beta: float) -> list[float]:
     return [np.exp(-beta * free_energy[x]) for x in range(len(free_energy))]
 
 
-def compute_barrier_integrand(evaluator_object, free_energy, beta):
+# TODO: typing evaluator object
+def compute_barrier_integrand(
+    evaluator_object, free_energy: np.array, beta: float
+) -> list[float]:
     return [
         np.exp(beta * free_energy[x])
         / gutl.linear_interp_coordinate_data(
@@ -124,19 +145,27 @@ def compute_barrier_integrand(evaluator_object, free_energy, beta):
     ]
 
 
-def compute_well_integrand_from_potential(potential, beta, x_range):
+# TODO: numpy
+def compute_well_integrand_from_potential(
+    potential: Callable, beta: float, x_range: list[float]
+) -> list[float]:
     return [np.exp(-beta * potential(x)) for x in x_range]
 
 
 def compute_barrier_integrand_from_potential(
-    potential, beta, diffusion_function, x_range
-):
+    potential: Callable, beta: float, diffusion_function: Callable, x_range: list[float]
+) -> list[float]:
     return [np.exp(beta * potential(x)) / diffusion_function(x) for x in x_range]
 
 
 def compute_well_and_barrier_integrals(
-    initial_x, final_x, mid_x, well_integrand, barrier_integrand, x_coords
-):
+    initial_x: float,
+    final_x: float,
+    mid_x: float,
+    well_integrand: list[float],
+    barrier_integrand: list[float],
+    x_coords: list[float],
+) -> (np.array, np.array):
     if final_x > initial_x:
         well_integral = integrate.simpson(
             well_integrand[initial_x : mid_x + 1], x_coords[initial_x : mid_x + 1]
@@ -158,8 +187,12 @@ def compute_well_and_barrier_integrals(
 
 
 def compute_kramers_rate(
-    transition, minima, well_integrand, barrier_integrand, x_coords
-):
+    transition,
+    minima: list[int],
+    well_integrand: list[float],
+    barrier_integrand: list[float],
+    x_coords: list[float],
+) -> float:
     initial_x = minima[transition[0]]
     final_x = minima[transition[1]]
     mid_x = int(np.floor((initial_x + final_x) / 2))
@@ -172,8 +205,12 @@ def compute_kramers_rate(
 
 
 def compute_kramers_rate_from_potential(
-    potential, beta, start_position, end_position, diffusion_function
-):
+    potential: Callable,
+    diffusion_function: Callable,
+    beta: float,
+    start_position: int,
+    end_position: int,
+) -> float:
     x_range = np.arange(
         start_position, end_position, (end_position - start_position) / 5000
     )
@@ -210,7 +247,9 @@ def compute_kramers_rate_from_potential(
 #     return counts
 
 
-def free_energy_estimate(samples, beta, minimum_counts=50):
+def free_energy_estimate(
+    samples: np.array, beta: float, minimum_counts: int = 50
+) -> (np.array, np.array):
     # histogram
     counts, coordinate = np.histogram(samples, bins=200)
     robust_counts = counts[np.where(counts > minimum_counts)]
@@ -224,7 +263,7 @@ def free_energy_estimate(samples, beta, minimum_counts=50):
     return free_energy, robust_coordinates
 
 
-def free_energy_estimate_2D(samples, beta, bins=300):
+def free_energy_estimate_2D(samples: np.array, beta: float, bins: int = 300):
     fig, axs = plt.subplots(1, 1)
     h, xedges, yedges, quadmesh = axs.hist2d(samples[:, 0], samples[:, 1], bins=bins)
     total_counts = np.sum(h)
@@ -236,7 +275,9 @@ def free_energy_estimate_2D(samples, beta, bins=300):
     return free_energy - np.min(free_energy), fig, axs, xedges, yedges
 
 
-def project_points_to_line(points, coords, theta):
+def project_points_to_line(
+    points: np.array, coords: np.array, theta: float
+) -> np.array:
     # coords = (x0, y0), a point that the line goes through
     # theta is the orientation of the line (e.g. theta = 0 is parallel to the x axis, theta = pi/2 is parallel to the y axis)
     a = coords
@@ -248,7 +289,9 @@ def project_points_to_line(points, coords, theta):
     return projected_points
 
 
-def relabel_trajectory_by_coordinate_chronology(traj, state_centers):
+def relabel_trajectory_by_coordinate_chronology(
+    traj: np.array, state_centers: np.array
+) -> np.array:
     sorted_indices = np.argsort(np.argsort(state_centers))
 
     # relabel states in trajectory
@@ -258,8 +301,10 @@ def relabel_trajectory_by_coordinate_chronology(traj, state_centers):
     return traj
 
 
-def compute_discrete_trajectory(trajectory, k=30):
-    cluster = pyemma.coordinates.cluster_kmeans(trajectory, k=k)
+def compute_discrete_trajectory(
+    traj: np.array, k: int = 30
+) -> (npt.NDArray[np.int], npt.NDArray[np.float64]):
+    cluster = pyemma.coordinates.cluster_kmeans(traj, k=k)
     discrete_traj = cluster.dtrajs[0]
     cluster_centers = cluster.clustercenters.flatten()
     discrete_traj = relabel_trajectory_by_coordinate_chronology(
@@ -270,17 +315,22 @@ def compute_discrete_trajectory(trajectory, k=30):
     return discrete_traj, cluster_centers
 
 
-def calculate_cni(i, X, n, P):
+def calculate_cni(i: int, X: np.array, n: int, P: np.array) -> np.array:
     return np.sum([(X[j] - X[i]) ** n * P[i, j] for j in range(len(X))])
 
 
-def calculate_c(X, n, P):
+def calculate_c(X: np.array, n: int, P: np.array) -> np.array:
     return np.array([calculate_cni(i, X, n, P) for i in range(len(X))])
 
 
 def correlation_coefficients_check(
-    beta, potential, discrete_traj, cluster_centers, lag, time_step
-):
+    beta: float,
+    potential: Callable,
+    discrete_traj: npt.NDArray[np.int],
+    cluster_centers: npt.NDArray[np.float64],
+    lag: int,
+    time_step: float,
+) -> None:
     tau = lag * time_step
 
     msm = pyemma.msm.estimate_markov_model(discrete_traj, lag)

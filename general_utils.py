@@ -5,12 +5,14 @@
    Author: Dominic Phillips (dominicp6)
 """
 
+from typing import Optional, Callable
+
 import numpy as np
 import scipy.interpolate as interpolate
 from scipy.ndimage import gaussian_filter1d
 
 
-def replace_inf_with_nan(array):
+def replace_inf_with_nan(array: np.array) -> np.array:
     for idx, entry in enumerate(array):
         if entry == np.inf or entry == -np.inf:
             array[idx] = np.nan
@@ -18,11 +20,11 @@ def replace_inf_with_nan(array):
     return array
 
 
-def rms_interval(array):
+def rms_interval(array: np.array) -> float:
     return np.sqrt(np.mean([(array[i]-array[i+1])**2 for i in range(len(array)-1)]))
 
 
-def vector_rmsd(x, y):
+def vector_rmsd(x: np.array, y: np.array) -> float:
     return np.sqrt(np.mean((x - y) ** 2))
 
 
@@ -49,7 +51,7 @@ def linear_interp_coordinate_data(x_data: list[float], y_data: list[float], x_to
         return float(y_data[-1] + (x_to_evaluate - x_max) * (y_data[-1] - y_data[-2]) / (x_data[-1] - x_data[-2]))
 
 
-def gaussian_smooth(x, y, dx, sigma):
+def gaussian_smooth(x: np.array, y: np.array, dx: float, sigma: float) -> (np.array, np.array):
     interp = interpolate.interp1d(x, y, fill_value='extrapolate')
     interpolated_x = np.arange(min(x), max(x)+dx/2, dx)
     sigma_gaussian = sigma/dx
@@ -58,7 +60,7 @@ def gaussian_smooth(x, y, dx, sigma):
     return interpolated_x, smoothed_y
 
 
-def select_lowest_minima(minima_array, function, n=2):
+def select_lowest_minima(minima_array: np.array, function: Callable, n: Optional[int] = 2) -> np.array:
     value_array = []
     for minima in minima_array:
         value_array.append(function(*minima))

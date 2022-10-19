@@ -7,20 +7,25 @@
 
 import warnings
 from math import ceil, floor
+from typing import Callable, Optional
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 from scipy.signal import find_peaks
+import numpy.typing as npt
 
 from diffusion_utils import (
     free_energy_estimate,
     project_points_to_line,
     free_energy_estimate_2D,
 )
+from MarkovStateModel import MSM
+
+type_kramers_rates = list[tuple[tuple[int, int], float]]
 
 
-def get_digit_text_width(fig, axis):
+def get_digit_text_width(fig, axis) -> float:
     r = fig.canvas.get_renderer()
     t = axis.text(0.5, 0.5, "1")
 
@@ -31,7 +36,7 @@ def get_digit_text_width(fig, axis):
     return bb.width / 2
 
 
-def display_kramers_rates(kramers_rates):
+def display_kramers_rates(kramers_rates: type_kramers_rates) -> None:
     print("Kramer's Rates")
     print("-" * 25)
     for rate in kramers_rates:
@@ -45,8 +50,8 @@ def display_kramers_rates(kramers_rates):
 
 
 def get_minima(
-    data_array, prominence, include_endpoint_minima: bool, ignore_high_minima: bool
-):
+    data_array: np.array, prominence: float, include_endpoint_minima: bool, ignore_high_minima: bool
+) -> npt.NDArray[np.int]:
     number_of_minima = 0
     current_prominence = prominence
     minima = None
@@ -81,7 +86,7 @@ def get_minima(
     return minima
 
 
-def plot_minima(minima_list, y_variable):
+def plot_minima(minima_list: npt.NDArray[np.int], y_variable: np.array) -> None:
     for idx, minima in enumerate(minima_list):
         print("Minima ", (round(minima[0], 3), round(minima[1], 3)))
         plt.text(
@@ -92,8 +97,8 @@ def plot_minima(minima_list, y_variable):
             color="b",
         )
 
-
-def display_state_boundaries(msm, y_coordinate):
+# TODO: np
+def display_state_boundaries(msm: MSM, y_coordinate: list[float]) -> list[float]:
     voronoi_cell_boundaries = [
         (msm.sorted_state_centers[i + 1] + msm.sorted_state_centers[i]) / 2
         for i in range(len(msm.sorted_state_centers) - 1)
@@ -110,7 +115,7 @@ def display_state_boundaries(msm, y_coordinate):
     return voronoi_cell_boundaries
 
 
-def display_state_numbers(boundaries, x_variable, y_variable, digit_width):
+def display_state_numbers(boundaries: np.array, x_variable: np.array, y_variable: np.array, digit_width: float) -> None:
     x_min = min(x_variable)
     y_min = min(y_variable)
     y_range = max(y_variable) - min(y_variable)
@@ -147,44 +152,7 @@ def display_state_numbers(boundaries, x_variable, y_variable, digit_width):
             )
 
 
-def plot_free_energy_landscape(self):
-    fig = plt.figure(figsize=(15, 7))
-    ax1 = plt.subplot()
-
-    # Diffusion curve
-    (l1,) = ax1.plot(self.smoothed_D_domain, self.smoothed_D, color="red")
-    ax1.set_ylim(
-        (
-            min(self.smoothed_D) - 0.2 * (max(self.smoothed_D) - min(self.smoothed_D)),
-            max(self.smoothed_D) + 0.1 * (max(self.smoothed_D) - min(self.smoothed_D)),
-        )
-    )
-
-    # Free energy curve
-    ax2 = ax1.twinx()
-    (l2,) = ax2.plot(self.coordinates, self.smoothed_F, color="k")
-    digit_width = get_digit_text_width(fig, ax2)
-    plt.legend([l1, l2], ["diffusion_coefficient", "free_energy"])
-
-    print(f"Free energy profile suggests {len(self.free_energy_minima)} minima.")
-    plot_minima(self.free_energy_minima, self.smoothed_F)
-    state_boundaries = display_state_boundaries(self.msm, self.smoothed_F)
-    if len(state_boundaries) < 50:
-        display_state_numbers(
-            state_boundaries, self.coordinates, self.smoothed_F, digit_width
-        )
-
-    ax1.set_xlabel("Q", fontsize=16)
-    ax1.set_ylabel(r"Diffusion Coefficient $D^{(2)}(Q)$ ($Q^2 / s$)", fontsize=18)
-    ax2.set_ylabel(r"$\mathcal{F}$ ($kJ/mol$)", fontsize=18)
-    plt.xticks(fontsize=14)
-    plt.yticks(fontsize=14)
-    # plt.title('Free Energy Landscape', fontsize=16)
-    plt.savefig("free_energy_landscape.pdf")
-    plt.show()
-
-
-def plot_free_energy_estimate(potential, samples, beta, name, minimum_counts=50):
+def plot_free_energy_estimate(potential: Callable, samples: np.array, beta: float, name: str, minimum_counts: int = 50):
     estimated_free_energy, coordinates = free_energy_estimate(
         samples, beta, minimum_counts
     )
@@ -205,7 +173,7 @@ def plot_free_energy_estimate(potential, samples, beta, name, minimum_counts=50)
     plt.savefig(name)
 
 
-def plot_free_energy_slice(samples, beta, slice_centre, slice_angle, minimum_counts=50):
+def plot_free_energy_slice(samples: np.array, beta: float, slice_centre: list, slice_angle: float, minimum_counts: int = 50) -> list:
     concatenated_samples = np.concatenate(samples)
     projected_samples = project_points_to_line(
         concatenated_samples, np.array(slice_centre), slice_angle
@@ -231,7 +199,7 @@ def plot_free_energy_slice(samples, beta, slice_centre, slice_angle, minimum_cou
     return projected_samples
 
 
-def plot_free_energy_surface(samples, beta, bins=300):
+def plot_free_energy_surface(samples: np.array, beta: float, bins: int = 300) -> None:
     concatenated_samples = np.concatenate(samples)
     free_energy, fig, axs, xedges, yedges = free_energy_estimate_2D(
         samples, beta, bins=bins
@@ -244,11 +212,11 @@ def plot_free_energy_surface(samples, beta, bins=300):
     plt.show()
 
 
-def hamiltonian(Q, P, M, U):
+def hamiltonian(Q: float, P: float, M: float, U: Callable) -> float:
     return -((P**2) / (2 * M) + U(Q))
 
 
-def phase_plot(Q, P, U, M):
+def phase_plot(Q: np.array, P: np.array, M: float, U: Callable) -> None:
     min_Q = min(Q)
     max_Q = max(Q)
     range_Q = max_Q - min_Q
@@ -266,7 +234,7 @@ def phase_plot(Q, P, U, M):
     plt.show()
 
 
-def trajectory_plot(Q0, Q1, U):
+def trajectory_plot(Q0: np.array, Q1: np.array, U: Callable) -> None:
     min_Q0 = min(Q0)
     max_Q0 = max(Q0)
     range_Q0 = max_Q0 - min_Q0
@@ -285,17 +253,17 @@ def trajectory_plot(Q0, Q1, U):
 
 
 def potential_contour_plot(
-    x_min,
-    x_max,
-    y_min,
-    y_max,
-    U,
-    vmin=None,
-    vmax=None,
-    set_min_to_zero=True,
-    save=True,
-    save_name="test",
-):
+    x_min: float,
+    x_max: float,
+    y_min: float,
+    y_max: float,
+    U: Callable,
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
+    set_min_to_zero: bool = True,
+    save: bool = True,
+    save_name: str = "test",
+) -> None:
     fig, axs = plt.subplots(1, 1)
     fig.set_size_inches(8, 8)
     axs.set_aspect("equal")

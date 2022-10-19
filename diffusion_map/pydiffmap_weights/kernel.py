@@ -3,10 +3,12 @@ A class to implement diffusion kernels.
 """
 
 import numbers
-import numpy as np
 import warnings
+
+import numpy as np
 from scipy.special import logsumexp
 from sklearn.neighbors import NearestNeighbors
+
 
 class Kernel(object):
     """
@@ -28,7 +30,16 @@ class Kernel(object):
         Optional parameters required for the metric given.
     """
 
-    def __init__(self, kernel_type='gaussian', epsilon='bgh', k=64, neighbor_params=None, metric='euclidean', metric_params=None, nearest_neighbors_algo='knearest'):
+    def __init__(
+        self,
+        kernel_type="gaussian",
+        epsilon="bgh",
+        k=64,
+        neighbor_params=None,
+        metric="euclidean",
+        metric_params=None,
+        nearest_neighbors_algo="knearest",
+    ):
         self.type = kernel_type
         self.epsilon = epsilon
         self.k = k
@@ -58,12 +69,17 @@ class Kernel(object):
         self.data = X
         # Construct Nearest Neighbor Tree
         with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", message="Parameter p is found in metric_params. The corresponding parameter from __init__ is ignored.")
-            self.neigh = NearestNeighbors(n_neighbors=self.k,
-                                          radius=1.0,
-                                          metric=self.metric,
-                                          metric_params=self.metric_params,
-                                          **self.neighbor_params)
+            warnings.filterwarnings(
+                "ignore",
+                message="Parameter p is found in metric_params. The corresponding parameter from __init__ is ignored.",
+            )
+            self.neigh = NearestNeighbors(
+                n_neighbors=self.k,
+                radius=1.0,
+                metric=self.metric,
+                metric_params=self.metric_params,
+                **self.neighbor_params
+            )
         self.neigh.fit(X)
         self.choose_optimal_epsilon()
         return self
@@ -86,19 +102,21 @@ class Kernel(object):
         if Y is None:
             Y = self.data
         # perform k nearest neighbour search on X and Y and construct sparse matrix
-        if self.nearest_neighbors_algo == 'knearest':
-            K = self.neigh.kneighbors_graph(Y, mode='distance')
-        elif self.nearest_neighbors_algo == 'radius':
+        if self.nearest_neighbors_algo == "knearest":
+            K = self.neigh.kneighbors_graph(Y, mode="distance")
+        elif self.nearest_neighbors_algo == "radius":
             radius = 10.0 * np.sqrt(self.epsilon_fitted)
-            K = self.neigh.radius_neighbors_graph(Y, radius, mode='distance')
+            K = self.neigh.radius_neighbors_graph(Y, radius, mode="distance")
         else:
-            raise ValueError('Did not understand neares neighbors method. Choose from knearest or radius.')
+            raise ValueError(
+                "Did not understand neares neighbors method. Choose from knearest or radius."
+            )
         # retrieve all nonzero elements and apply kernel function to it
         v = K.data
-        if (self.type == 'gaussian'):
-            K.data = np.exp(-v**2/self.epsilon_fitted)
+        if self.type == "gaussian":
+            K.data = np.exp(-(v**2) / self.epsilon_fitted)
         else:
-            raise("Error: Kernel type not understood.")
+            raise ("Error: Kernel type not understood.")
         return K
 
     def choose_optimal_epsilon(self, epsilon=None):
@@ -122,14 +140,20 @@ class Kernel(object):
         if isinstance(epsilon, numbers.Number):  # if user provided.
             self.epsilon_fitted = epsilon
             return self
-        elif epsilon == 'bgh':  # Berry, Giannakis Harlim method.
-            dists = self.neigh.kneighbors_graph(self.data, mode='distance').data
+        elif epsilon == "bgh":  # Berry, Giannakis Harlim method.
+            dists = self.neigh.kneighbors_graph(self.data, mode="distance").data
             sq_distances = dists**2
-            if (self.metric != 'euclidean'):  # TODO : replace with call to scipy metrics.
-                warnings.warn('The BGH method for choosing epsilon assumes a euclidean metric.  However, the metric being used is %s.  Proceed at your own risk...' % self.metric)
+            if self.metric != "euclidean":  # TODO : replace with call to scipy metrics.
+                warnings.warn(
+                    "The BGH method for choosing epsilon assumes a euclidean metric.  However, the metric being used is %s.  Proceed at your own risk..."
+                    % self.metric
+                )
             self.epsilon_fitted, self.d = choose_optimal_epsilon_BGH(sq_distances)
         else:
-            raise ValueError("Method for automatically choosing epsilon was given as %s, but this was not recognized" % epsilon)
+            raise ValueError(
+                "Method for automatically choosing epsilon was given as %s, but this was not recognized"
+                % epsilon
+            )
         return self
 
 
@@ -167,13 +191,13 @@ def choose_optimal_epsilon_BGH(scaled_distsq, epsilons=None):
        (2015).
     """
     if epsilons is None:
-        epsilons = 2**np.arange(-40., 41., 1.)
+        epsilons = 2 ** np.arange(-40.0, 41.0, 1.0)
 
-    epsilons = np.sort(epsilons).astype('float')
-    log_T = [logsumexp(-scaled_distsq/eps) for eps in epsilons]
+    epsilons = np.sort(epsilons).astype("float")
+    log_T = [logsumexp(-scaled_distsq / eps) for eps in epsilons]
     log_eps = np.log(epsilons)
-    log_deriv = np.diff(log_T)/np.diff(log_eps)
+    log_deriv = np.diff(log_T) / np.diff(log_eps)
     max_loc = np.argmax(log_deriv)
     epsilon = np.exp(log_eps[max_loc])
-    d = np.round(2.*log_deriv[max_loc])
+    d = np.round(2.0 * log_deriv[max_loc])
     return epsilon, d
