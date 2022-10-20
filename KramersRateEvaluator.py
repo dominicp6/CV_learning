@@ -2,6 +2,20 @@
 
 """Module for estimating Kramer's hopping rates in an unknown potential energy surface using long-trajectory samples.
 
+This module can be used to assess the relative quality of collective variables (CVs) by comparing the estimated Kramers
+rates corresponding to the different CV free energy surfaces (FESs).
+
+Methodological details: Given a collective variable trajectory between metastable states, KramersRateEvaluator then
+estimates the FES (using the histogram method) and estimates the position-dependent diffusion coefficient
+(by defining a Markov State Model between the states and computing coefficients of the Kramers-Moyal
+expansion via estimated correlation coefficients). The Kramer's transition rate is then evaluated by numerical
+integration of the estimated space-dependent diffusion coefficient and FES. For theory details see [LINK].
+
+Motivation: An optimal CV corresponds to a perfect reaction coordinate and should define a coordinate axis that is
+perpendicular to the separatrix at the transition state. An optimal CV will thus result in the largest barrier height
+and lowest transition rate compared to other possible CVs. The relative performance of CVs can thus be assessed by
+comparing their relative Kramer's rates.
+
    Author: Dominic Phillips (dominicp6)
 """
 
@@ -25,8 +39,10 @@ import general_utils as gutl
 type_kramers_rates = list[tuple[tuple[int, int], float]]
 
 class KramersRateEvaluator:
-    # TODO: type of default clustering
-    def __init__(self, verbose: bool = True, default_clustering=None):
+    def __init__(self,
+                 verbose: bool = True,
+                 default_clustering: Union[RegularSpaceClustering, KmeansClustering] = None
+                 ):
         self.verbose = verbose
         self.imputer = MiceImputer(strategy={"F": "interpolate"}, n=1, return_list=True)
         self.default_clustering = default_clustering
@@ -149,7 +165,11 @@ class KramersRateEvaluator:
         pltutl.plot_free_energy_landscape(self)
 
         well_integrand = utl.compute_well_integrand(self.smoothed_F, beta)
-        barrier_integrand = utl.compute_barrier_integrand(self, self.smoothed_F, beta)
+        barrier_integrand = utl.compute_barrier_integrand(self.smoothed_D_domain,
+                                                          self.smoothed_D,
+                                                          self.coordinates,
+                                                          self.smoothed_F,
+                                                          beta)
 
         # 2) Compute the Kramer's transition rates between every possible pair of minima
         kramers_rates = []
