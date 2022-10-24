@@ -127,7 +127,7 @@ def cluster_time_series(
 
 # TODO: np
 def compute_well_integrand(free_energy: np.array, beta: float) -> list[float]:
-    return [np.exp(-beta * free_energy[x]) for x in range(len(free_energy))]
+    return [np.exp(-beta * x) for x in free_energy]
 
 
 # TODO: typing evaluator object

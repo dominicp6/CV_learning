@@ -54,8 +54,8 @@ def linear_interp_coordinate_data(x_data: list[float], y_data: list[float], x_to
 def gaussian_smooth(x: np.array, y: np.array, dx: float, sigma: float) -> (np.array, np.array):
     interp = interpolate.interp1d(x, y, fill_value='extrapolate')
     interpolated_x = np.arange(min(x), max(x)+dx/2, dx)
-    sigma_gaussian = sigma/dx
-    smoothed_y = gaussian_filter1d(interp(interpolated_x), sigma_gaussian, mode='nearest')
+    sigma_gaussian = sigma / dx
+    smoothed_y = gaussian_filter1d(interp(interpolated_x), sigma_gaussian, mode='reflect')
 
     return interpolated_x, smoothed_y
 
