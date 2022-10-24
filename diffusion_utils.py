@@ -130,16 +130,19 @@ def compute_well_integrand(free_energy: np.array, beta: float) -> list[float]:
     return [np.exp(-beta * x) for x in free_energy]
 
 
-# TODO: typing evaluator object
 def compute_barrier_integrand(
-    evaluator_object, free_energy: np.array, beta: float
+    diff_const_domain: list[float],
+    diff_const_values: list[float],
+    coordinates: list[float],
+    free_energy: np.array,
+    beta: float
 ) -> list[float]:
     return [
         np.exp(beta * free_energy[x])
         / gutl.linear_interp_coordinate_data(
-            evaluator_object.smoothed_D_domain,
-            evaluator_object.smoothed_D,
-            evaluator_object.coordinates[x],
+            diff_const_domain,
+            diff_const_values,
+            coordinates[x],
         )
         for x in range(len(free_energy))
     ]
@@ -187,7 +190,7 @@ def compute_well_and_barrier_integrals(
 
 
 def compute_kramers_rate(
-    transition,
+    transition: tuple[int, int],
     minima: list[int],
     well_integrand: list[float],
     barrier_integrand: list[float],
