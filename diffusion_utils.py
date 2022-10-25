@@ -171,11 +171,11 @@ def compute_well_and_barrier_integrals(
 ) -> (np.array, np.array):
     if final_x > initial_x:
         well_integral = integrate.simpson(
-            well_integrand[initial_x : mid_x + 1], x_coords[initial_x : mid_x + 1]
+            well_integrand[initial_x: mid_x + 1], x_coords[initial_x: mid_x + 1]
         )
         barrier_integral = integrate.simpson(
             barrier_integrand[initial_x + 1 : final_x],
-            x_coords[initial_x + 1 : final_x],
+            x_coords[initial_x + 1: final_x],
         )
     else:
         well_integral = integrate.simpson(

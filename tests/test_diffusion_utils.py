@@ -30,19 +30,36 @@ def test_compute_barrier_integrand_from_potential():
     assert np.allclose(output, expected_output)
 
 
-# TODO: complete test
 def test_compute_well_and_barrier_integrals():
-    pass
+    test_initial_x = 0
+    test_final_x = 3
+    test_mid_x = 1
+    test_well_integrand = np.array([0.0, 1.0, 2.0, 3.0])
+    test_barrier_integrand = np.array([1.0, 2.0, 3.0, 4.0])
+    test_x_coords = np.array([0.0, 1.0, 2.0, 3.0])
+    expected_well_integral = 0.5 * 1 * 1
+    expected_barrier_integral = 2 + 0.5 * 1 * 1
+    well_integral, barrier_integral = compute_well_and_barrier_integrals(test_initial_x, test_final_x, test_mid_x, test_well_integrand, test_barrier_integrand, test_x_coords)
+    assert np.isclose(well_integral, expected_well_integral)
+    assert np.isclose(barrier_integral, expected_barrier_integral)
+    test_initial_x = 3
+    test_final_x = 0
+    test_mid_x = 1
+    expected_well_integral = 0.5 * 2 * 1 + 3
+    expected_barrier_integral = 2 + 0.5 * 1 * 1
+    well_integral, barrier_integral = compute_well_and_barrier_integrals(test_initial_x, test_final_x, test_mid_x,
+                                                                         test_well_integrand, test_barrier_integrand,
+                                                                         test_x_coords)
+    assert np.isclose(well_integral, expected_well_integral)
+    assert np.isclose(barrier_integral, expected_barrier_integral)
 
-# TODO: fix and understand this function
+
 def test_project_points_to_line():
     test_points = np.array([[-1.0, 0.0], [0.0, 1.0], [1.0, 2.0]])
     test_coords = np.array([0.0, 2.0])
     test_theta = np.pi / 4
-    expected_output = np.array([[-1.0, 1.0], [0.0, 2.0], [1.0, 3.0]])
+    expected_output = np.array([-np.sqrt(2) - 1/np.sqrt(2), -1/np.sqrt(2), np.sqrt(2)-1/np.sqrt(2)])
     output = project_points_to_line(test_points, test_coords, test_theta)
-    print(expected_output)
-    print(output)
     assert np.allclose(output, expected_output)
 
 
