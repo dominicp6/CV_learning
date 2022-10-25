@@ -5,6 +5,8 @@
    Author: Dominic Phillips (dominicp6)
 """
 
+from typing import Callable
+
 import dill
 import numpy as np
 import scipy.ndimage
@@ -14,41 +16,26 @@ import matplotlib.pyplot as plt
 from scipy.ndimage.filters import gaussian_filter
 
 from general_utils import select_lowest_minima
+from potentials import ring_double_well_potential
 
 
-def find_nearest(array, value):
+def find_nearest(array: np.array, value: float) -> float:
+    # Return element of array that is closest to value
     array = np.asarray(array)
     idx = (np.abs(array - value)).argmin()
 
     return array[idx]
 
 
-def cart2pol(x, y):
+def cart2pol(x: float, y: float) -> (float, float):
+    # Converts Cartesian coordinates to polar coordinates
     r = np.sqrt(x**2 + y**2)
     theta = np.arctan2(y, x)
 
     return r, theta
 
 
-def ring_double_well_potential(x):
-    theta0 = np.pi
-    r0 = 1
-    w = 0.2
-    d = 5
-    r, theta = cart2pol(x[0], x[1])
-
-    return (
-        (1 / r) * np.exp(r / r0)
-        - d * np.exp(-((x[0] - r0) ** 2 + (x[1]) ** 2) / (2 * w**2))
-        - d
-        * np.exp(
-            -((x[0] - r0 * np.cos(theta0)) ** 2 + (x[1] - r0 * np.sin(theta0)) ** 2)
-            / (2 * w**2)
-        )
-    )
-
-
-def free_energy_estimate_2D(samples, beta, bins=300, weights=None):
+def free_energy_estimate_2D(samples: np.array, beta: float, bins: int = 300, weights: np.array = None):
     hist, xedges, yedges = np.histogram2d(
         samples[:, 0], samples[:, 1], bins=bins, weights=weights
     )
@@ -62,7 +49,7 @@ def free_energy_estimate_2D(samples, beta, bins=300, weights=None):
 
 class AreaOfInterest:
     def __init__(
-        self, x_min, x_max, y_min, y_max, x_samples=1000, y_samples=1000, values=None
+        self, x_min: float, x_max: float, y_min: float, y_max: float, x_samples: int = 1000, y_samples: int = 1000, values: np.array = None
     ):
         self.x_min = x_min
         self.x_max = x_max
@@ -101,16 +88,16 @@ class AreaOfInterest:
     def grid_point_values(self):
         return self.values.flatten()
 
-    def impute_x(self, index):
+    def impute_x(self, index: int) -> float:
         return self.x_min + (index / self.x_samples) * self.x_width
 
-    def impute_y(self, index):
+    def impute_y(self, index: int) -> float:
         return self.y_min + (index / self.y_samples) * self.y_width
 
-    def indices_to_coordinate(self, x_index, y_index):
-        return [self.impute_x(x_index), self.impute_y(y_index)]
+    def indices_to_coordinate(self, x_index: int, y_index: int) -> (float, float):
+        return self.impute_x(x_index), self.impute_y(y_index)
 
-    def evaluate_function(self, function):
+    def evaluate_function(self, function: Callable) -> np.array:
         values = np.zeros((self.x_samples, self.y_samples))
         for x in range(self.x_samples):
             for y in range(self.y_samples):
@@ -130,7 +117,7 @@ class AreaOfInterest:
             method="cubic",
         ).reshape((self.x_samples, self.y_samples))
 
-    def detect_local_minima(self, values=None, function=None):
+    def detect_local_minima(self, values: np.array = None, function: Callable = None) -> float:
         if values is None and function is not None:
             values = self.evaluate_function(function)
         elif values is not None and function is not None:
@@ -164,7 +151,7 @@ class AreaOfInterest:
         plt.show()
         return self.minima
 
-    def has_same_mesh(self, other):
+    def has_same_mesh(self, other) -> bool:
         if self.values is None or other.values is None:
             return False
         elif (
@@ -178,7 +165,7 @@ class AreaOfInterest:
         else:
             return False
 
-    def array_interpolate_function(self, sigma=None):
+    def array_interpolate_function(self, sigma: float = None) -> np.array:
         """
         Generates a cubic interpolation function for an area of interest.
         """
@@ -193,7 +180,7 @@ class AreaOfInterest:
 
         return cubic_interpolated_array
 
-    def compute_minima_anomaly(self, other, sigma_other=None, sigma_this=None):
+    def compute_minima_anomaly(self, other, sigma_other: float = None, sigma_this: float = None) -> float:
         """
         Computes minima anomaly assuming self as the reference.
         """
@@ -228,7 +215,7 @@ class AreaOfInterest:
 
         return anomaly
 
-    def compute_rmsd_domain_anomaly(self, other, ignore_nans=True, sigma=None):
+    def compute_rmsd_domain_anomaly(self, other, ignore_nans: bool = True, sigma: float = None) -> float:
         if not self.has_same_mesh(other):
             interpolated_grid = self.grid_interpolation(other)
             print(
@@ -262,14 +249,14 @@ class AreaOfInterest:
 
 
 class ConvergenceAnalyser:
-    def __init__(self, reference_grid: AreaOfInterest, trajectory):
+    def __init__(self, reference_grid: AreaOfInterest, trajectory: np.array):
         self.trajectory = trajectory
         self.reference_grid = reference_grid
         self.local_minima = self.reference_grid.detect_local_minima(
             values=reference_grid.values
         )
 
-    def plot_anomaly(self, burn_in=100000, plot_interval=2000, sigma=None):
+    def plot_anomaly(self, burn_in: int = 100000, plot_interval: int = 2000, sigma: float = None):
         steps = []
         minima_anomalies = []
         domain_rmsd_anomalies = []
