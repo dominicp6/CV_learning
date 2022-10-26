@@ -9,7 +9,10 @@ import pyemma
 import matplotlib.pyplot as plt
 import numpy.typing as npt
 
-
+# TODO: transition matrix only defined by specified tau value
+# need to add a check to make sure that the calculation of the
+# diffusion coefficient is consistent with the transition matrix
+# that is provided by the user
 class MSM:
     def __init__(self, state_centers: npt.NDArray[np.float64]):
         self.state_centers = state_centers
@@ -21,7 +24,7 @@ class MSM:
         self.time_step = None
         self.discrete_trajectory = None
 
-    def compute_states_for_range(self, lower_value: float, upper_value: float):
+    def compute_states_for_range(self, lower_value: float, upper_value: float) -> np.array:
         state_boundaries = [
             (self.sorted_state_centers[i + 1] + self.sorted_state_centers[i]) / 2
             for i in range(len(self.sorted_state_centers) - 1)
@@ -70,7 +73,7 @@ class MSM:
         assert self.transition_matrix is not None
         return np.sum(
             [
-                (self.sorted_state_centers[j] - self.sorted_state_centers) ** n
+                (self.sorted_state_centers - self.sorted_state_centers[j]) ** n
                 * self.transition_matrix[:, j]
                 for j in range(self.number_of_states)
             ],
@@ -88,12 +91,10 @@ class MSM:
 
     def compute_diffusion_coefficient(self, time_step: float, lag: int):
         tau = lag * time_step
-        print(tau, type(tau))
         c1 = self.calculate_correlation_coefficient(n=1)
         c2 = self.calculate_correlation_coefficient(n=2)
         # space-dependent diffusion coefficient
         diffusion_coefficient = (c2 - c1**2) / (2 * tau)
-        print(diffusion_coefficient)
 
         return diffusion_coefficient
 
@@ -116,12 +117,12 @@ class MSM:
         plt.show()
 
     def compute_transition_rate(
-        self, state_A: list[float, float], state_B: list[float, float]
+        self, state_A: tuple[float, float], state_B: tuple[float, float]
     ):
         # Note lag must be the same as the lag used to define the Markov State Model
         msm = pyemma.msm.estimate_markov_model(self.discrete_trajectory, lag=self.lag)
-        initial_states = self.compute_states_for_range(state_A)
-        final_states = self.compute_states_for_range(state_B)
+        initial_states = self.compute_states_for_range(state_A[0], state_A[1])
+        final_states = self.compute_states_for_range(state_B[0], state_A[1])
         mfpt = msm.mfpt(A=initial_states, B=final_states) * self.time_step
 
         return 1 / mfpt

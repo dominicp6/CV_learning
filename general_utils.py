@@ -8,6 +8,7 @@
 from typing import Optional, Callable
 
 import numpy as np
+import numpy.typing as npt
 import scipy.interpolate as interpolate
 from scipy.ndimage import gaussian_filter1d
 
@@ -28,7 +29,7 @@ def vector_rmsd(x: np.array, y: np.array) -> float:
     return np.sqrt(np.mean((x - y) ** 2))
 
 
-def linear_interp_coordinate_data(x_data: list[float], y_data: list[float], x_to_evaluate: float) -> float:
+def linear_interp_coordinate_data(x_data: npt.NDArray[np.float64], y_data: npt.NDArray[np.float64], x_to_evaluate: float) -> float:
     x_min = min(x_data)
     x_max = max(x_data)
 

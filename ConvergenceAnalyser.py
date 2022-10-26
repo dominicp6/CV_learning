@@ -5,6 +5,8 @@
    Author: Dominic Phillips (dominicp6)
 """
 
+from typing import Callable
+
 import dill
 import numpy as np
 import scipy.ndimage
@@ -14,121 +16,26 @@ import matplotlib.pyplot as plt
 from scipy.ndimage.filters import gaussian_filter
 
 from general_utils import select_lowest_minima
+from potentials import ring_double_well_potential
 
 
-def get_mean_and_variance(list_of_arrays):
-    mean_array = np.zeros(list_of_arrays[0].shape)
-    std_array = np.zeros(list_of_arrays[0].shape)
-    num_arrs = len(list_of_arrays)
-    for arr in list_of_arrays:
-        mean_array += arr
-    mean_array /= num_arrs
-
-    for arr in list_of_arrays:
-        std_array += arr ** 2
-    std_array /= num_arrs
-    std_array -= mean_array ** 2
-    std_array = np.sqrt(std_array)
-
-    return mean_array, std_array
-
-
-def get_x_y_z_fe(exp):
-    xyz = check_and_remove_nans(np.hstack([exp.dihedral_traj, np.array([exp.bias_potential_traj]).T]))
-    x = xyz[:, 0]
-    y = xyz[:, 1]
-    z = xyz[:, 2]
-    fe = -z + np.max(z)
-    return x, y, z, fe
-
-
-def get_mean_and_variance_fe_traj(exps, data_fraction, interpolation_method, number_of_points):
-    combined_fe_traj = []
-    for exp in exps:
-        x, y, z, fe = get_x_y_z_fe(exp)
-
-        # Get time intervals for plot
-        time_intervals = [int(data_fraction * (point_number + 1) * len(fe) / number_of_points) for point_number in
-                          range(number_of_points)]
-
-        # Compute free energy deviations for each time interval
-        free_energy_trajectory = []
-        for time in tqdm(time_intervals):
-            interpolated_points = scipy.interpolate.griddata(points=(x[:time], y[:time]), values=fe[:time],
-                                                             xi=critical_points, method=interpolation_method)
-            free_energy_trajectory.append(interpolated_points)
-        combined_fe_traj.append(np.array(free_energy_trajectory))
-    combined_fe_traj = np.array(combined_fe_traj)
-
-    mean_fe_traj, std_fe_traj = get_mean_and_variance(combined_fe_traj)
-    return mean_fe_traj, std_fe_traj, time_intervals
-
-
-def convergence_of_critical_points(mean_fe_traj, std_fe_traj, critial_points, critical_point_labels, ref_fe,
-                                   time_intervals):
-    for point_idx in range(len(critical_points)):
-        fe_traj_crit_point = np.abs(mean_fe_traj[:, point_idx] - ref_fe[point_idx])
-        plt.plot(np.array(time_intervals) / 1000, fe_traj_crit_point, label=critical_point_labels[point_idx])
-        plt.fill_between(np.array(time_intervals) / 1000, fe_traj_crit_point - std_fe_traj[:, point_idx],
-                         fe_traj_crit_point + std_fe_traj[:, point_idx])
-    plt.xlabel('Elapsed Time (ns)', fontsize=18)
-    plt.ylabel(r'$\log\left(F-\hat{F}\right)$', fontsize=18)
-    plt.yscale('log')
-    plt.legend()
-    plt.show()
-
-
-def plot_convergence(exps, reference_exp, points_of_interest, number_of_points=5, interpolation_method='linear',
-                     data_fraction=1):
-    for exp in exps:
-        assert exp.savefreq == reference_exp.savefreq
-
-    x_r, y_r, z_r, fe_r = get_x_y_z_fe(reference_exp)
-
-    critical_point_labels = [point[0] for point in points_of_interest]
-    critical_points = [[point[1], point[2]] for point in points_of_interest]
-
-    ref_fe = scipy.interpolate.griddata(points=(x_r, y_r), values=fe_r, xi=critical_points, method=interpolation_method)
-
-    mean_fe_traj, std_fe_traj, time_intervals = get_mean_and_variance_fe_traj(exps, data_fraction, interpolation_method,
-                                                                              number_of_points)
-
-    convergence_of_critical_points(mean_fe_traj, std_fe_traj, critical_points, critical_point_labels, ref_fe,
-                                   time_intervals)
-
-def find_nearest(array, value):
+def find_nearest(array: np.array, value: float) -> float:
+    # Return element of array that is closest to value
     array = np.asarray(array)
     idx = (np.abs(array - value)).argmin()
 
     return array[idx]
 
 
-def cart2pol(x, y):
+def cart2pol(x: float, y: float) -> (float, float):
+    # Converts Cartesian coordinates to polar coordinates
     r = np.sqrt(x**2 + y**2)
     theta = np.arctan2(y, x)
 
     return r, theta
 
 
-def ring_double_well_potential(x):
-    theta0 = np.pi
-    r0 = 1
-    w = 0.2
-    d = 5
-    r, theta = cart2pol(x[0], x[1])
-
-    return (
-        (1 / r) * np.exp(r / r0)
-        - d * np.exp(-((x[0] - r0) ** 2 + (x[1]) ** 2) / (2 * w**2))
-        - d
-        * np.exp(
-            -((x[0] - r0 * np.cos(theta0)) ** 2 + (x[1] - r0 * np.sin(theta0)) ** 2)
-            / (2 * w**2)
-        )
-    )
-
-
-def free_energy_estimate_2D(samples, beta, bins=300, weights=None):
+def free_energy_estimate_2D(samples: np.array, beta: float, bins: int = 300, weights: np.array = None):
     hist, xedges, yedges = np.histogram2d(
         samples[:, 0], samples[:, 1], bins=bins, weights=weights
     )
@@ -140,89 +47,9 @@ def free_energy_estimate_2D(samples, beta, bins=300, weights=None):
     return free_energy - np.min(free_energy), xedges, yedges
 
 
-def get_mean_and_variance(list_of_arrays):
-    mean_array = np.zeros(list_of_arrays[0].shape)
-    std_array = np.zeros(list_of_arrays[0].shape)
-    num_arrs = len(list_of_arrays)
-    for arr in list_of_arrays:
-        mean_array += arr
-    mean_array /= num_arrs
-
-    for arr in list_of_arrays:
-        std_array += arr ** 2
-    std_array /= num_arrs
-    std_array -= mean_array ** 2
-    std_array = np.sqrt(std_array)
-
-    return mean_array, std_array
-
-
-def get_x_y_z_fe(exp):
-    xyz = check_and_remove_nans(np.hstack([exp.dihedral_traj, np.array([exp.bias_potential_traj]).T]))
-    x = xyz[:, 0]
-    y = xyz[:, 1]
-    z = xyz[:, 2]
-    fe = -z + np.max(z)
-    return x, y, z, fe
-
-
-def get_mean_and_variance_fe_traj(exps, data_fraction, interpolation_method, number_of_points):
-    combined_fe_traj = []
-    for exp in exps:
-        x, y, z, fe = get_x_y_z_fe(exp)
-
-        # Get time intervals for plot
-        time_intervals = [int(data_fraction * (point_number + 1) * len(fe) / number_of_points) for point_number in
-                          range(number_of_points)]
-
-        # Compute free energy deviations for each time interval
-        free_energy_trajectory = []
-        for time in tqdm(time_intervals):
-            interpolated_points = scipy.interpolate.griddata(points=(x[:time], y[:time]), values=fe[:time],
-                                                             xi=critical_points, method=interpolation_method)
-            free_energy_trajectory.append(interpolated_points)
-        combined_fe_traj.append(np.array(free_energy_trajectory))
-    combined_fe_traj = np.array(combined_fe_traj)
-
-    mean_fe_traj, std_fe_traj = get_mean_and_variance(combined_fe_traj)
-    return mean_fe_traj, std_fe_traj, time_intervals
-
-
-def convergence_of_critical_points(mean_fe_traj, std_fe_traj, critial_points, critical_point_labels, ref_fe,
-                                   time_intervals):
-    for point_idx in range(len(critical_points)):
-        fe_traj_crit_point = np.abs(mean_fe_traj[:, point_idx] - ref_fe[point_idx])
-        plt.plot(np.array(time_intervals) / 1000, fe_traj_crit_point, label=critical_point_labels[point_idx])
-        plt.fill_between(np.array(time_intervals) / 1000, fe_traj_crit_point - std_fe_traj[:, point_idx],
-                         fe_traj_crit_point + std_fe_traj[:, point_idx])
-    plt.xlabel('Elapsed Time (ns)', fontsize=18)
-    plt.ylabel(r'$\log\left(F-\hat{F}\right)$', fontsize=18)
-    plt.yscale('log')
-    plt.legend()
-    plt.show()
-
-
-def plot_convergence(exps, reference_exp, points_of_interest, number_of_points=5, interpolation_method='linear',
-                     data_fraction=1):
-    for exp in exps:
-        assert exp.savefreq == reference_exp.savefreq
-
-    x_r, y_r, z_r, fe_r = get_x_y_z_fe(reference_exp)
-
-    critical_point_labels = [point[0] for point in points_of_interest]
-    critical_points = [[point[1], point[2]] for point in points_of_interest]
-
-    ref_fe = scipy.interpolate.griddata(points=(x_r, y_r), values=fe_r, xi=critical_points, method=interpolation_method)
-
-    mean_fe_traj, std_fe_traj, time_intervals = get_mean_and_variance_fe_traj(exps, data_fraction, interpolation_method,
-                                                                              number_of_points)
-
-    convergence_of_critical_points(mean_fe_traj, std_fe_traj, critical_points, critical_point_labels, ref_fe,
-                                   time_intervals)
-
 class AreaOfInterest:
     def __init__(
-        self, x_min, x_max, y_min, y_max, x_samples=1000, y_samples=1000, values=None
+        self, x_min: float, x_max: float, y_min: float, y_max: float, x_samples: int = 1000, y_samples: int = 1000, values: np.array = None
     ):
         self.x_min = x_min
         self.x_max = x_max
@@ -261,16 +88,16 @@ class AreaOfInterest:
     def grid_point_values(self):
         return self.values.flatten()
 
-    def impute_x(self, index):
+    def impute_x(self, index: int) -> float:
         return self.x_min + (index / self.x_samples) * self.x_width
 
-    def impute_y(self, index):
+    def impute_y(self, index: int) -> float:
         return self.y_min + (index / self.y_samples) * self.y_width
 
-    def indices_to_coordinate(self, x_index, y_index):
-        return [self.impute_x(x_index), self.impute_y(y_index)]
+    def indices_to_coordinate(self, x_index: int, y_index: int) -> (float, float):
+        return self.impute_x(x_index), self.impute_y(y_index)
 
-    def evaluate_function(self, function):
+    def evaluate_function(self, function: Callable) -> np.array:
         values = np.zeros((self.x_samples, self.y_samples))
         for x in range(self.x_samples):
             for y in range(self.y_samples):
@@ -290,7 +117,7 @@ class AreaOfInterest:
             method="cubic",
         ).reshape((self.x_samples, self.y_samples))
 
-    def detect_local_minima(self, values=None, function=None):
+    def detect_local_minima(self, values: np.array = None, function: Callable = None) -> float:
         if values is None and function is not None:
             values = self.evaluate_function(function)
         elif values is not None and function is not None:
@@ -324,7 +151,7 @@ class AreaOfInterest:
         plt.show()
         return self.minima
 
-    def has_same_mesh(self, other):
+    def has_same_mesh(self, other) -> bool:
         if self.values is None or other.values is None:
             return False
         elif (
@@ -338,7 +165,7 @@ class AreaOfInterest:
         else:
             return False
 
-    def array_interpolate_function(self, sigma=None):
+    def array_interpolate_function(self, sigma: float = None) -> np.array:
         """
         Generates a cubic interpolation function for an area of interest.
         """
@@ -353,7 +180,7 @@ class AreaOfInterest:
 
         return cubic_interpolated_array
 
-    def compute_minima_anomaly(self, other, sigma_other=None, sigma_this=None):
+    def compute_minima_anomaly(self, other, sigma_other: float = None, sigma_this: float = None) -> float:
         """
         Computes minima anomaly assuming self as the reference.
         """
@@ -388,7 +215,7 @@ class AreaOfInterest:
 
         return anomaly
 
-    def compute_rmsd_domain_anomaly(self, other, ignore_nans=True, sigma=None):
+    def compute_rmsd_domain_anomaly(self, other, ignore_nans: bool = True, sigma: float = None) -> float:
         if not self.has_same_mesh(other):
             interpolated_grid = self.grid_interpolation(other)
             print(
@@ -422,14 +249,14 @@ class AreaOfInterest:
 
 
 class ConvergenceAnalyser:
-    def __init__(self, reference_grid: AreaOfInterest, trajectory):
+    def __init__(self, reference_grid: AreaOfInterest, trajectory: np.array):
         self.trajectory = trajectory
         self.reference_grid = reference_grid
         self.local_minima = self.reference_grid.detect_local_minima(
             values=reference_grid.values
         )
 
-    def plot_anomaly(self, burn_in=100000, plot_interval=2000, sigma=None):
+    def plot_anomaly(self, burn_in: int = 100000, plot_interval: int = 2000, sigma: float = None):
         steps = []
         minima_anomalies = []
         domain_rmsd_anomalies = []

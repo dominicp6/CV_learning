@@ -125,19 +125,18 @@ def cluster_time_series(
     return cluster
 
 
-# TODO: np
-def compute_well_integrand(free_energy: np.array, beta: float) -> list[float]:
-    return [np.exp(-beta * x) for x in free_energy]
+def compute_well_integrand(free_energy: npt.NDArray[np.float64], beta: float) -> npt.NDArray[np.float64]:
+    return np.exp(-beta * free_energy)
 
-
+# TODO: efficiency improvements?
 def compute_barrier_integrand(
-    diff_const_domain: list[float],
-    diff_const_values: list[float],
-    coordinates: list[float],
-    free_energy: np.array,
+    diff_const_domain: npt.NDArray[np.float64],
+    diff_const_values: npt.NDArray[np.float64],
+    coordinates: npt.NDArray[np.float64],
+    free_energy: npt.NDArray[np.float64],
     beta: float
-) -> list[float]:
-    return [
+) -> npt.NDArray[np.float64]:
+    return np.array([
         np.exp(beta * free_energy[x])
         / gutl.linear_interp_coordinate_data(
             diff_const_domain,
@@ -145,37 +144,36 @@ def compute_barrier_integrand(
             coordinates[x],
         )
         for x in range(len(free_energy))
-    ]
+    ])
 
 
-# TODO: numpy
 def compute_well_integrand_from_potential(
-    potential: Callable, beta: float, x_range: list[float]
-) -> list[float]:
-    return [np.exp(-beta * potential(x)) for x in x_range]
+    potential: Callable, beta: float, x_range: np.array
+) -> np.array:
+    return np.exp(-beta * np.apply_along_axis(potential, axis=0, arr=x_range))
 
 
 def compute_barrier_integrand_from_potential(
-    potential: Callable, beta: float, diffusion_function: Callable, x_range: list[float]
-) -> list[float]:
-    return [np.exp(beta * potential(x)) / diffusion_function(x) for x in x_range]
+    potential: Callable, beta: float, diffusion_function: Callable, x_range: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    return np.array([np.exp(beta * potential(x)) / diffusion_function(x) for x in x_range])
 
 
 def compute_well_and_barrier_integrals(
     initial_x: float,
     final_x: float,
     mid_x: float,
-    well_integrand: list[float],
-    barrier_integrand: list[float],
-    x_coords: list[float],
+    well_integrand: npt.NDArray[np.float64],
+    barrier_integrand: npt.NDArray[np.float64],
+    x_coords: npt.NDArray[np.float64],
 ) -> (np.array, np.array):
     if final_x > initial_x:
         well_integral = integrate.simpson(
-            well_integrand[initial_x : mid_x + 1], x_coords[initial_x : mid_x + 1]
+            well_integrand[initial_x: mid_x + 1], x_coords[initial_x: mid_x + 1]
         )
         barrier_integral = integrate.simpson(
             barrier_integrand[initial_x + 1 : final_x],
-            x_coords[initial_x + 1 : final_x],
+            x_coords[initial_x + 1: final_x],
         )
     else:
         well_integral = integrate.simpson(
@@ -191,10 +189,10 @@ def compute_well_and_barrier_integrals(
 
 def compute_kramers_rate(
     transition: tuple[int, int],
-    minima: list[int],
-    well_integrand: list[float],
-    barrier_integrand: list[float],
-    x_coords: list[float],
+    minima: npt.NDArray[np.int],
+    well_integrand: npt.NDArray[np.float64],
+    barrier_integrand: npt.NDArray[np.float64],
+    x_coords: npt.NDArray[np.float64],
 ) -> float:
     initial_x = minima[transition[0]]
     final_x = minima[transition[1]]
