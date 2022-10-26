@@ -16,6 +16,86 @@ from scipy.ndimage.filters import gaussian_filter
 from general_utils import select_lowest_minima
 
 
+def get_mean_and_variance(list_of_arrays):
+    mean_array = np.zeros(list_of_arrays[0].shape)
+    std_array = np.zeros(list_of_arrays[0].shape)
+    num_arrs = len(list_of_arrays)
+    for arr in list_of_arrays:
+        mean_array += arr
+    mean_array /= num_arrs
+
+    for arr in list_of_arrays:
+        std_array += arr ** 2
+    std_array /= num_arrs
+    std_array -= mean_array ** 2
+    std_array = np.sqrt(std_array)
+
+    return mean_array, std_array
+
+
+def get_x_y_z_fe(exp):
+    xyz = check_and_remove_nans(np.hstack([exp.dihedral_traj, np.array([exp.bias_potential_traj]).T]))
+    x = xyz[:, 0]
+    y = xyz[:, 1]
+    z = xyz[:, 2]
+    fe = -z + np.max(z)
+    return x, y, z, fe
+
+
+def get_mean_and_variance_fe_traj(exps, data_fraction, interpolation_method, number_of_points):
+    combined_fe_traj = []
+    for exp in exps:
+        x, y, z, fe = get_x_y_z_fe(exp)
+
+        # Get time intervals for plot
+        time_intervals = [int(data_fraction * (point_number + 1) * len(fe) / number_of_points) for point_number in
+                          range(number_of_points)]
+
+        # Compute free energy deviations for each time interval
+        free_energy_trajectory = []
+        for time in tqdm(time_intervals):
+            interpolated_points = scipy.interpolate.griddata(points=(x[:time], y[:time]), values=fe[:time],
+                                                             xi=critical_points, method=interpolation_method)
+            free_energy_trajectory.append(interpolated_points)
+        combined_fe_traj.append(np.array(free_energy_trajectory))
+    combined_fe_traj = np.array(combined_fe_traj)
+
+    mean_fe_traj, std_fe_traj = get_mean_and_variance(combined_fe_traj)
+    return mean_fe_traj, std_fe_traj, time_intervals
+
+
+def convergence_of_critical_points(mean_fe_traj, std_fe_traj, critial_points, critical_point_labels, ref_fe,
+                                   time_intervals):
+    for point_idx in range(len(critical_points)):
+        fe_traj_crit_point = np.abs(mean_fe_traj[:, point_idx] - ref_fe[point_idx])
+        plt.plot(np.array(time_intervals) / 1000, fe_traj_crit_point, label=critical_point_labels[point_idx])
+        plt.fill_between(np.array(time_intervals) / 1000, fe_traj_crit_point - std_fe_traj[:, point_idx],
+                         fe_traj_crit_point + std_fe_traj[:, point_idx])
+    plt.xlabel('Elapsed Time (ns)', fontsize=18)
+    plt.ylabel(r'$\log\left(F-\hat{F}\right)$', fontsize=18)
+    plt.yscale('log')
+    plt.legend()
+    plt.show()
+
+
+def plot_convergence(exps, reference_exp, points_of_interest, number_of_points=5, interpolation_method='linear',
+                     data_fraction=1):
+    for exp in exps:
+        assert exp.savefreq == reference_exp.savefreq
+
+    x_r, y_r, z_r, fe_r = get_x_y_z_fe(reference_exp)
+
+    critical_point_labels = [point[0] for point in points_of_interest]
+    critical_points = [[point[1], point[2]] for point in points_of_interest]
+
+    ref_fe = scipy.interpolate.griddata(points=(x_r, y_r), values=fe_r, xi=critical_points, method=interpolation_method)
+
+    mean_fe_traj, std_fe_traj, time_intervals = get_mean_and_variance_fe_traj(exps, data_fraction, interpolation_method,
+                                                                              number_of_points)
+
+    convergence_of_critical_points(mean_fe_traj, std_fe_traj, critical_points, critical_point_labels, ref_fe,
+                                   time_intervals)
+
 def find_nearest(array, value):
     array = np.asarray(array)
     idx = (np.abs(array - value)).argmin()
@@ -59,6 +139,86 @@ def free_energy_estimate_2D(samples, beta, bins=300, weights=None):
 
     return free_energy - np.min(free_energy), xedges, yedges
 
+
+def get_mean_and_variance(list_of_arrays):
+    mean_array = np.zeros(list_of_arrays[0].shape)
+    std_array = np.zeros(list_of_arrays[0].shape)
+    num_arrs = len(list_of_arrays)
+    for arr in list_of_arrays:
+        mean_array += arr
+    mean_array /= num_arrs
+
+    for arr in list_of_arrays:
+        std_array += arr ** 2
+    std_array /= num_arrs
+    std_array -= mean_array ** 2
+    std_array = np.sqrt(std_array)
+
+    return mean_array, std_array
+
+
+def get_x_y_z_fe(exp):
+    xyz = check_and_remove_nans(np.hstack([exp.dihedral_traj, np.array([exp.bias_potential_traj]).T]))
+    x = xyz[:, 0]
+    y = xyz[:, 1]
+    z = xyz[:, 2]
+    fe = -z + np.max(z)
+    return x, y, z, fe
+
+
+def get_mean_and_variance_fe_traj(exps, data_fraction, interpolation_method, number_of_points):
+    combined_fe_traj = []
+    for exp in exps:
+        x, y, z, fe = get_x_y_z_fe(exp)
+
+        # Get time intervals for plot
+        time_intervals = [int(data_fraction * (point_number + 1) * len(fe) / number_of_points) for point_number in
+                          range(number_of_points)]
+
+        # Compute free energy deviations for each time interval
+        free_energy_trajectory = []
+        for time in tqdm(time_intervals):
+            interpolated_points = scipy.interpolate.griddata(points=(x[:time], y[:time]), values=fe[:time],
+                                                             xi=critical_points, method=interpolation_method)
+            free_energy_trajectory.append(interpolated_points)
+        combined_fe_traj.append(np.array(free_energy_trajectory))
+    combined_fe_traj = np.array(combined_fe_traj)
+
+    mean_fe_traj, std_fe_traj = get_mean_and_variance(combined_fe_traj)
+    return mean_fe_traj, std_fe_traj, time_intervals
+
+
+def convergence_of_critical_points(mean_fe_traj, std_fe_traj, critial_points, critical_point_labels, ref_fe,
+                                   time_intervals):
+    for point_idx in range(len(critical_points)):
+        fe_traj_crit_point = np.abs(mean_fe_traj[:, point_idx] - ref_fe[point_idx])
+        plt.plot(np.array(time_intervals) / 1000, fe_traj_crit_point, label=critical_point_labels[point_idx])
+        plt.fill_between(np.array(time_intervals) / 1000, fe_traj_crit_point - std_fe_traj[:, point_idx],
+                         fe_traj_crit_point + std_fe_traj[:, point_idx])
+    plt.xlabel('Elapsed Time (ns)', fontsize=18)
+    plt.ylabel(r'$\log\left(F-\hat{F}\right)$', fontsize=18)
+    plt.yscale('log')
+    plt.legend()
+    plt.show()
+
+
+def plot_convergence(exps, reference_exp, points_of_interest, number_of_points=5, interpolation_method='linear',
+                     data_fraction=1):
+    for exp in exps:
+        assert exp.savefreq == reference_exp.savefreq
+
+    x_r, y_r, z_r, fe_r = get_x_y_z_fe(reference_exp)
+
+    critical_point_labels = [point[0] for point in points_of_interest]
+    critical_points = [[point[1], point[2]] for point in points_of_interest]
+
+    ref_fe = scipy.interpolate.griddata(points=(x_r, y_r), values=fe_r, xi=critical_points, method=interpolation_method)
+
+    mean_fe_traj, std_fe_traj, time_intervals = get_mean_and_variance_fe_traj(exps, data_fraction, interpolation_method,
+                                                                              number_of_points)
+
+    convergence_of_critical_points(mean_fe_traj, std_fe_traj, critical_points, critical_point_labels, ref_fe,
+                                   time_intervals)
 
 class AreaOfInterest:
     def __init__(
