@@ -1,221 +1,309 @@
 import os
 import argparse
+import sys
 from collections import namedtuple
 from datetime import datetime
+import json
 
 import openmm
 import openmm.app as app
 import openmm.unit as unit
-
-##############################################
-#   CONSTANTS
-##############################################
-
-CHECKPOINT_FN = "checkpoint.chk"
-TRAJECTORY_FN = "trajectory.dcd"
-STATE_DATA_FN = "state_data.csv"
-
-valid_ffs = ['ani2x', 'ani1ccx', 'amber', "ani2x_mixed", "ani1ccx_mixed"]
-
-# basic quantity string parsing ("1.2ns" -> openmm.Quantity)
-unit_labels = {
-    "us": unit.microseconds,
-    "ns": unit.nanoseconds,
-    "ps": unit.picoseconds,
-    "fs": unit.femtoseconds
-}
-
-
-def parse_quantity(s):
-    try:
-        u = s.lstrip('0123456789.')
-        v = s[:-len(u)]
-        return unit.Quantity(
-            float(v),
-            unit_labels[u]
-        )
-    except Exception:
-        raise ValueError(f"Invalid quantity: {s}")
-
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.ticker as tkr
+import seaborn as sns
 
 SystemArgs = namedtuple("System Args",
                         "pdb forcefield resume duration savefreq stepsize "
-                        "frictioncoeff total_steps steps_per_save nonperiodic gpu")
+                        "frictioncoeff total_steps steps_per_save nonperiodic gpu minimise precision")
 
 SystemObjs = namedtuple("System Objs",
                         "pdb modeller peptide_indices system")
 
 SimulationProps = namedtuple("Simulation Props", "integrator simulation properties")
 
-def parse_args():
-    parser = argparse.ArgumentParser(description='Production run for an equilibrated biomolecule.')
-    parser.add_argument("pdb", help="PDB file describing topology and positions. Should be solvated and equilibrated")
-    parser.add_argument("ff", help=f"Forcefield/Potential to use: {valid_ffs}")
-    parser.add_argument("-r", "--resume", help="Resume simulation from an existing production directory")
-    parser.add_argument("-g", "--gpu", default="",
-                        help="Choose CUDA device(s) to target [note - ANI must run on GPU 0]")
-    parser.add_argument("-d", "--duration", default="1ns", help="Duration of simulation")
-    parser.add_argument("-f", "--savefreq", default="1ps", help="Interval for all reporters to save data")
-    parser.add_argument("-s", "--stepsize", default="2fs", help="Integrator step size")
-    parser.add_argument("-c", "--frictioncoeff", default="1ps",
-                        help="Integrator friction coeff [your value]^-1 ie for 0.1fs^-1 put in 0.1fs. "
-                             "The unit but not the value will be converted to its reciprocal.")
-    parser.add_argument("-np", "--nonperiodic", action=argparse.BooleanOptionalAction,
-                        help="Prevent periodic boundary conditions from being applied")
-    args = parser.parse_args()
-    pdb = args.pdb
-    forcefield = args.ff.lower()
-    resume = args.resume
-    duration = parse_quantity(args.duration)
-    savefreq = parse_quantity(args.savefreq)
-    stepsize = parse_quantity(args.stepsize)
-    frictioncoeff = parse_quantity(args.frictioncoeff)
-    frictioncoeff = frictioncoeff._value / frictioncoeff.unit
-    total_steps = int(duration / stepsize)
-    steps_per_save = int(savefreq / stepsize)
-    nonperiodic = args.nonperiodic
-    gpu = args.gpu
 
-    return SystemArgs(pdb, forcefield, resume, duration, savefreq, stepsize, frictioncoeff, total_steps, steps_per_save, nonperiodic, gpu)
+class OpenMMSimulation:
 
+    def __init__(self):
+        # CONSTANTS
+        self.CHECKPOINT_FN = "checkpoint.chk"
+        self.TRAJECTORY_FN = "trajectory.dcd"
+        self.STATE_DATA_FN = "state_data.csv"
+        self.METADATA_FN = "metadata.json"
 
-def check_args(SystemArgs: SystemArgs):
-    if SystemArgs.forcefield not in valid_ffs:
-        print(f"Invalid forcefield: {SystemArgs.forcefield}, must be {valid_ffs}")
-        quit()
+        self.valid_ffs = ['ani2x', 'ani1ccx', 'amber', "ani2x_mixed", "ani1ccx_mixed"]
+        self.valid_precision = ['single', 'mixed', 'double']
 
-    if not os.path.isdir(SystemArgs.resume):
-        print(f"Production directory to resume is not a directory: {SystemArgs.resume}")
-        quit()
+        # basic quantity string parsing ("1.2ns" -> openmm.Quantity)
+        self.unit_labels = {
+            "us": unit.microseconds,
+            "ns": unit.nanoseconds,
+            "ps": unit.picoseconds,
+            "fs": unit.femtoseconds
+        }
 
-    if SystemArgs.resume:
-        resume_contains = os.listdir(SystemArgs.resume)
-        resume_requires = (
-            CHECKPOINT_FN,
-            TRAJECTORY_FN,
-            STATE_DATA_FN
-        )
+        # PROPERTIES
+        self.systemargs = None
+        self.systemobjs = None
+        self.simulationprops = None
+        self.output_dir = None
 
-        if not all(filename in resume_contains for filename in resume_requires):
-            print(f"Production directory to resume must contain files with the following names: {resume_requires}")
+    def parse_quantity(self, s: str):
+        try:
+            u = s.lstrip('0123456789.')
+            v = s[:-len(u)]
+            return unit.Quantity(
+                float(v),
+                self.unit_labels[u]
+            )
+        except Exception:
+            raise ValueError(f"Invalid quantity: {s}")
+
+    def parse_args(self):
+        parser = argparse.ArgumentParser(description='Production run for an equilibrated biomolecule.')
+        parser.add_argument("pdb",
+                            help="(file) PDB file describing topology and positions. Should be solvated and equilibrated")
+        parser.add_argument("ff", help=f"Forcefield/Potential to use: {self.valid_ffs}")
+        parser.add_argument("pr", help=f"Precision to use: {self.valid_precision}")
+        parser.add_argument("-r", "--resume", help="(dir) Resume simulation from an existing production directory")
+        # The CUDA Platform supports parallelizing a simulation across multiple GPUs. \
+        # To do that, set this to a comma separated list of values. For example, -g 0,1.
+        parser.add_argument("-g", "--gpu", default="",
+                            help="(int) Choose CUDA device(s) to target [note - ANI must run on GPU 0]")
+        parser.add_argument("-d", "--duration", default="1ns", help="Duration of simulation")
+        parser.add_argument("-f", "--savefreq", default="1ps", help="Interval for all reporters to save data")
+        parser.add_argument("-s", "--stepsize", default="2fs", help="Integrator step size")
+        parser.add_argument("-c", "--frictioncoeff", default="1ps",
+                            help="Integrator friction coeff [your value]^-1 ie for 0.1fs^-1 put in 0.1fs. "
+                                 "The unit but not the value will be converted to its reciprocal.")
+        parser.add_argument("-np", "--nonperiodic", action=argparse.BooleanOptionalAction,
+                            help="Prevent periodic boundary conditions from being applied")
+        parser.add_argument("-m", "--minimise", action=argparse.BooleanOptionalAction,
+                            help="Minimises energy before running the simulation (recommended)")
+        args = parser.parse_args()
+        pdb = args.pdb
+        forcefield = args.ff.lower()
+        resume = args.resume
+        duration = self.parse_quantity(args.duration)
+        savefreq = self.parse_quantity(args.savefreq)
+        stepsize = self.parse_quantity(args.stepsize)
+        frictioncoeff = self.parse_quantity(args.frictioncoeff)
+        frictioncoeff = frictioncoeff._value / frictioncoeff.unit
+        total_steps = int(duration / stepsize)
+        steps_per_save = int(savefreq / stepsize)
+        nonperiodic = args.nonperiodic
+        minimise = args.minimise
+        precision = args.pr.lower()
+        gpu = args.gpu
+        self.systemargs = SystemArgs(pdb, forcefield, resume, duration, savefreq, stepsize, frictioncoeff, total_steps,
+                                     steps_per_save, nonperiodic, gpu, minimise, precision)
+
+        return self.systemargs
+
+    def check_args(self):
+        if self.systemargs.forcefield not in self.valid_ffs:
+            print(f"Invalid forcefield: {self.systemargs.forcefield}, must be {self.valid_ffs}")
             quit()
 
-        # # Use existing output directory
-        # output_dir = resume
+        if not os.path.isdir(self.systemargs.resume):
+            print(f"Production directory to resume is not a directory: {self.systemargs.resume}")
+            quit()
+
+        if self.systemargs.resume:
+            resume_contains = os.listdir(self.systemargs.resume)
+            resume_requires = (
+                self.CHECKPOINT_FN,
+                self.TRAJECTORY_FN,
+                self.STATE_DATA_FN
+            )
+
+            if not all(filename in resume_contains for filename in resume_requires):
+                print(f"Production directory to resume must contain files with the following names: {resume_requires}")
+                quit()
+
+    def make_output_directory(self) -> str:
+        if self.systemargs.resume:
+            # Use existing output directory
+            output_dir = self.systemargs.resume
+        else:
+            # Make output directory
+            pdb_filename = os.path.splitext(os.path.basename(self.systemargs.pdb))[0]
+            output_dir = f"production_{pdb_filename}_{self.systemargs.forcefield}_{datetime.datetime.now().strftime('%H%M%S_%d%m%y')}"
+            output_dir = os.path.join("outputs", output_dir)
+            os.makedirs(output_dir)
+
+        self.output_dir = output_dir
+        return self.output_dir
+
+    # TODO: updating metadata
+    def save_simulation_metadata(self):
+        with open(os.path.join(self.output_dir, self.METADATA_FN+'.json'), 'w') as json_file:
+            json.dump(self.systemargs, json_file)
 
 
-def make_output_directory(SystemArgs: SystemArgs):
-    if SystemArgs.resume:
-        output_dir = SystemArgs.resume
-    else:
-        # Make output directory
-        pdb_filename = os.path.splitext(os.path.basename(SystemArgs.pdb))[0]
-        output_dir = f"production_{pdb_filename}_{SystemArgs.forcefield}_{datetime.datetime.now().strftime('%H%M%S_%d%m%y')}"
-        output_dir = os.path.join("outputs", output_dir)
-        os.makedirs(output_dir)
+    def initialise_pdb(self) -> app.PDBFile:
+        pdb = app.PDBFile(self.systemargs.pdb)
+        if self.systemargs.nonperiodic:
+            pdb.topology.setPeriodicBoxVectors(None)
 
-    return output_dir
+        return pdb
 
+    def get_peptide_indices(self, pdb) -> list[int]:
+        return [atom.index for atom in pdb.topology.atoms() if atom.residue.name != "HOH"]
 
-def initialise_pdb(SystemArgs) -> app.PDBFile:
-    pdb = app.PDBFile(SystemArgs.pdb)
-    if SystemArgs.nonperiodic:
-        pdb.topology.setPeriodicBoxVectors(None)
+    def initialise_modeller(self, pdb) -> app.Modeller:
+        modeller = app.Modeller(
+            pdb.topology,
+            pdb.positions
+        )
+        modeller.deleteWater()
 
-    return pdb
+        return modeller
 
+    def write_pdb(self, pdb: app.PDBFile, modeller: app.Modeller):
+        # for convenience, create "topology.pdb" of the raw peptide, as it is saved in the dcd.
+        # this is helpful for analysis scripts which rely on it down the line
+        pdb.writeFile(
+            modeller.getTopology(),
+            modeller.getPositions(),
+            open(os.path.join(self.output_dir, "topology.pdb"), "w")
+        )
 
-def get_peptide_indices(pdb) -> list[int]:
-    return [atom.index for atom in pdb.topology.atoms() if atom.residue.name != "HOH"]
+    def create_system(self, pdb: app.PDBFile):
+        if self.systemargs.forcefield is "amber":  # Create AMBER system
+            ff = app.ForceField('amber14-all.xml', 'amber14/tip3p.xml')
+        else:
+            raise ValueError(f'Force field {self.systemargs.forcefield} not supported.')
 
+        """
+        nonbondedMethod - The method to use for nonbonded interactions.
+                          Allowed values are NoCutoff, CutoffNonPeriodic, CutoffPeriodic, Ewald, or PME.
+        nonbondedCutoff - The cutoff distance to use for nonbonded interactions.
+        constraints (object=None) – Specifies which bonds and angles should be implemented with constraints.
+                                    Allowed values are None, HBonds, AllBonds, or HAngles.
+        """
+        return ff.createSystem(
+            pdb.topology,
+            nonbondedMethod=app.CutoffNonPeriodic,
+            nonbondedCutoff=1 * unit.nanometer,
+            # constraints = app.AllBonds,
+        )
 
-def initialise_modeller(pdb) -> app.Modeller:
-    modeller = app.Modeller(
-        pdb.topology,
-        pdb.positions
-    )
-    modeller.deleteWater()
+    def setup_system(self):
+        self.check_args()
+        self.make_output_directory()
+        pdb = self.initialise_pdb()
+        peptide_indices = self.get_peptide_indices(pdb)
+        modeller = self.initialise_modeller(pdb)
+        self.write_pdb(pdb, modeller)
+        system = self.create_system(pdb)
 
-    return modeller
+        self.systemobjs = SystemObjs(pdb, modeller, peptide_indices, system)
+        return self.systemobjs
 
+    def setup_simulation(self):
+        self.initialise_simulation()
+        if self.systemargs.minimise:
+            self.simulationprops.simulation.minimizeEnergy()
+        self.setup_reporters()
 
-def write_pdb(pdb: app.PDBFile, modeller: app.Modeller, output_dir: str):
-    # for convenience, create "topology.pdb" of the raw peptide, as it is saved in the dcd.
-    # this is helpful for analysis scripts which rely on it down the line
-    pdb.writeFile(
-        modeller.getTopology(),
-        modeller.getPositions(),
-        open(os.path.join(output_dir, "topology.pdb"), "w")
-    )
+    def initialise_simulation(self):
+        print("Initialising production run...")
 
+        properties = {'CudaDeviceIndex': self.systemargs.gpu, 'Precision': self.systemargs.precision}
 
-def create_system(SystemArgs: SystemArgs, pdb: app.PDBFile):
-    """
-    nonbondedMethod - The method to use for nonbonded interactions.
-                      Allowed values are NoCutoff, CutoffNonPeriodic, CutoffPeriodic, Ewald, or PME.
-    nonbondedCutoff - The cutoff distance to use for nonbonded interactions.
-    constraints (object=None) – Specifies which bonds and angles should be implemented with constraints.
-                                Allowed values are None, HBonds, AllBonds, or HAngles.
-    """
+        # Create constant temp integrator
+        integrator = openmm.LangevinMiddleIntegrator(
+            300 * unit.kelvin,
+            self.systemargs.frictioncoeff,
+            self.systemargs.stepsize
+        )
+        # Create simulation and set initial positions
+        simulation = app.Simulation(
+            self.systemobjs.pdb.topology,
+            self.systemobjs.system,
+            integrator,
+            openmm.Platform.getPlatformByName("CUDA"),
+            properties
+        )
 
-    if SystemArgs.forcefield is "amber":  # Create AMBER system
-        ff = app.ForceField('amber14-all.xml','amber14/tip3p.xml')
-    else:
-        raise ValueError(f'Force field {SystemArgs.forcefield} not supported.')
+        simulation.context.setPositions(SystemObjs.pdb.positions)
+        if SystemArgs.resume:
+            with open(os.path.join(self.output_dir, self.CHECKPOINT_FN), "rb") as f:
+                simulation.context.loadCheckpoint(f.read())
+                print("Loaded checkpoint")
 
-    return ff.createSystem(
-        pdb.topology,
-        nonbondedMethod=app.CutoffNonPeriodic,
-        nonbondedCutoff=1 * unit.nanometer,
-        # constraints = app.AllBonds,
-    )
+        self.simulationprops = SimulationProps(integrator, simulation, properties)
+        return self.simulationprops
 
+    def setup_reporters(self):
+        # Reporter to print info to stdout
+        self.simulationprops.simulation.reporters.append(app.StateDataReporter(
+            sys.stdout,
+            self.systemargs.steps_per_save,
+            progress=True,  # Info to print. Add anything you want here.
+            remainingTime=True,
+            speed=True,
+            totalSteps=self.systemargs.total_steps,
+        ))
+        # Reporter to log lots of info to csv
+        self.simulationprops.simulation.reporters.append(app.StateDataReporter(
+            os.path.join(self.output_dir, self.STATE_DATA_FN),
+            self.systemargs.steps_per_save,
+            step=True,
+            time=True,
+            speed=True,
+            temperature=True,
+            potentialEnergy=True,
+            kineticEnergy=True,
+            totalEnergy=True,
+            append=True if self.systemargs.resume else False
+        ))
+        # Reporter to save trajectory
+        # Save only a subset of atoms to the trajectory, ignore water
+        self.simulationprops.simulation.reporters.append(app.DCDReporter(
+            os.path.join(self.output_dir, self.TRAJECTORY_FN),
+            reportInterval=self.systemargs.steps_per_save,
+            append=True if self.systemargs.resume else False))
 
-def setup_system(SystemArgs: SystemArgs, output_dir: str):
-    check_args(SystemArgs)
-    make_output_directory(SystemArgs)
-    pdb = initialise_pdb(SystemArgs)
-    peptide_indices = get_peptide_indices(pdb)
-    modeller = initialise_modeller(pdb)
-    write_pdb(pdb, modeller, output_dir)
-    system = create_system(SystemArgs, pdb)
+        # Reporter to save regular checkpoints
+        self.simulationprops.simulation.reporters.append(app.CheckpointReporter(
+            os.path.join(self.output_dir, self.CHECKPOINT_FN),
+            self.systemargs.steps_per_save
+        ))
 
-    return SystemObjs(pdb, modeller, peptide_indices, system)
+    def run_simulation(self):
+        print("Running production...")
+        self.simulationprops.simulation.step(self.systemargs.total_steps)
+        print("Done")
 
+    def save_checkpoint(self):
+        # Save final checkpoint and state
+        self.simulationprops.simulation.saveCheckpoint(os.path.join(self.output_dir, self.CHECKPOINT_FN))
+        self.simulationprops.simulation.saveState(os.path.join(self.output_dir, 'end_state.xml'))
 
-def initialise_simulation(SystemArgs: SystemArgs, SystemObjs: SystemObjs, output_dir: str):
-    print("Initialising production run...")
+    def make_graphs(self):
+        # Make some graphs
+        report = pd.read_csv(os.path.join(self.output_dir, self.STATE_DATA_FN))
+        report = report.melt()
 
-    properties = {'CudaDeviceIndex': SystemArgs.gpu}
+        with sns.plotting_context('paper'):
+            g = sns.FacetGrid(data=report, row='variable', sharey=False)
+            g.map(plt.plot, 'value')
+            # format the labels with f-strings
+            for ax in g.axes.flat:
+                ax.xaxis.set_major_formatter(
+                    tkr.FuncFormatter(
+                        lambda x, p: f'{(x * self.systemargs.stepsize).value_in_unit(unit.nanoseconds):.1f}ns'))
+            plt.savefig(os.path.join(self.output_dir, 'graphs.png'), bbox_inches='tight')
 
-    # Create constant temp integrator
-    integrator = openmm.LangevinMiddleIntegrator(
-        300 * unit.kelvin,
-        SystemArgs.frictioncoeff,
-        SystemArgs.stepsize
-    )
-    # Create simulation and set initial positions
-    simulation = app.Simulation(
-        SystemObjs.pdb.topology,
-        SystemObjs.system,
-        integrator,
-        openmm.Platform.getPlatformByName("CUDA"),
-        properties
-    )
-
-    simulation.context.setPositions(SystemObjs.pdb.positions)
-    if SystemArgs.resume:
-        with open(os.path.join(output_dir, CHECKPOINT_FN), "rb") as f:
-            simulation.context.loadCheckpoint(f.read())
-            print("Loaded checkpoint")
-
-    return SimulationProps(integrator, simulation, properties)
-
-
-
-
-
-
-
-
-
+# Next Steps
+# print a trajectory of the aaa dihedrals, counting the flips
+# heatmap of phi and psi would be a good first analysis, use mdanalysis
+# aiming for https://docs.mdanalysis.org/1.1.0/documentation_pages/analysis/dihedrals.html
+# number of events going between minima states
+# "timetrace" - a plot of the dihedral over time (aim for 500ns)
+# do this first, shows how often you go back and forth. one plot for each phi/psi angle
+# four plots - for each set of pairs
+# this gives two heatmap plots like in the documentation
