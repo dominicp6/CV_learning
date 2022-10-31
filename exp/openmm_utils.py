@@ -261,7 +261,8 @@ class OpenMMSimulation:
     def initialise_simulation(self):
         properties = {'CudaDeviceIndex': self.systemargs.gpu, 'Precision': self.systemargs.precision}
 
-        self.systemobjs.system.addForce(openmm.MonteCarloBarostat(self.systemargs.pressure, self.systemargs.temperature))
+        # TODO: add barostat
+        #self.systemobjs.system.addForce(openmm.MonteCarloBarostat(self.systemargs.pressure, self.systemargs.temperature))
 
         # Create constant temp integrator
         integrator = openmm.LangevinMiddleIntegrator(
