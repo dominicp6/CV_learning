@@ -15,7 +15,7 @@ import seaborn as sns
 
 SystemArgs = namedtuple("System_Args",
                         "pdb forcefield resume duration savefreq stepsize "
-                        "frictioncoeff total_steps steps_per_save nonperiodic gpu minimise precision")
+                        "frictioncoeff total_steps steps_per_save nonperiodic gpu minimise precision watermodel")
 
 SystemObjs = namedtuple("System_Objs",
                         "pdb modeller peptide_indices system")
@@ -34,6 +34,7 @@ class OpenMMSimulation:
 
         self.valid_ffs = ['ani2x', 'ani1ccx', 'amber', "ani2x_mixed", "ani1ccx_mixed"]
         self.valid_precision = ['single', 'mixed', 'double']
+        self.valid_wms = ['tip3p', 'tip3pfb', 'spce', 'tip4pew', 'tip4pfb', 'tip5p']
 
         # basic quantity string parsing ("1.2ns" -> openmm.Quantity)
         self.unit_labels = {
@@ -48,6 +49,7 @@ class OpenMMSimulation:
         self.systemobjs = None
         self.simulationprops = None
         self.output_dir = None
+        self.force_field = None
 
     def parse_quantity(self, s: str):
         try:
@@ -81,10 +83,13 @@ class OpenMMSimulation:
                             help="Prevent periodic boundary conditions from being applied")
         parser.add_argument("-m", "--minimise", action=argparse.BooleanOptionalAction,
                             help="Minimises energy before running the simulation (recommended)")
+        parser.add_argument("-w", "--water", default="", help=f"(str) The water model: {self.valid_wms}")
         args = parser.parse_args()
         pdb = args.pdb
         forcefield = args.ff.lower()
+        precision = args.pr.lower()
         resume = args.resume
+        gpu = args.gpu
         duration = self.parse_quantity(args.duration)
         savefreq = self.parse_quantity(args.savefreq)
         stepsize = self.parse_quantity(args.stepsize)
@@ -94,10 +99,10 @@ class OpenMMSimulation:
         steps_per_save = int(savefreq / stepsize)
         nonperiodic = args.nonperiodic
         minimise = args.minimise
-        precision = args.pr.lower()
-        gpu = args.gpu
+        watermodel = args.water
+
         self.systemargs = SystemArgs(pdb, forcefield, resume, duration, savefreq, stepsize, frictioncoeff, total_steps,
-                                     steps_per_save, nonperiodic, gpu, minimise, precision)
+                                     steps_per_save, nonperiodic, gpu, minimise, precision, watermodel)
 
         return self.systemargs
 
@@ -105,6 +110,9 @@ class OpenMMSimulation:
         if self.systemargs.forcefield not in self.valid_ffs:
             print(f"Invalid forcefield: {self.systemargs.forcefield}, must be {self.valid_ffs}")
             quit()
+
+        if self.systemargs.watermodel not in self.valid_wms and not None:
+            print(f"Invalid water model: {self.systemargs.watermodel}, must be {self.valid_wms}")
 
         if self.systemargs.resume is not None and not os.path.isdir(self.systemargs.resume):
             print(f"Production directory to resume is not a directory: {self.systemargs.resume}")
@@ -121,6 +129,19 @@ class OpenMMSimulation:
             if not all(filename in resume_contains for filename in resume_requires):
                 print(f"Production directory to resume must contain files with the following names: {resume_requires}")
                 quit()
+
+    def setup_system(self):
+        self.check_args()
+        self.make_output_directory()
+        pdb = self.initialise_pdb()
+        peptide_indices = self.get_peptide_indices(pdb)
+        self.initialise_forcefield()
+        modeller = self.initialise_modeller(pdb)
+        self.write_pdb(pdb, modeller)
+        system = self.create_system(pdb)
+
+        self.systemobjs = SystemObjs(pdb, modeller, peptide_indices, system)
+        return self.systemobjs
 
     def make_output_directory(self) -> str:
         if self.systemargs.resume:
@@ -141,7 +162,6 @@ class OpenMMSimulation:
         with open(os.path.join(self.output_dir, self.METADATA_FN+'.json'), 'w') as json_file:
             json.dump(self.systemargs, json_file)
 
-
     def initialise_pdb(self) -> app.PDBFile:
         pdb = app.PDBFile(self.systemargs.pdb)
         if self.systemargs.nonperiodic:
@@ -152,12 +172,23 @@ class OpenMMSimulation:
     def get_peptide_indices(self, pdb) -> list[int]:
         return [atom.index for atom in pdb.topology.atoms() if atom.residue.name != "HOH"]
 
+    def initialise_forcefield(self) -> app.ForceField:
+        if self.systemargs.forcefield == "amber":  # Create AMBER system
+            self.force_field = app.ForceField('amber14-all.xml', 'amber14/tip3p.xml')
+        else:
+            raise ValueError(f'Force field {self.systemargs.forcefield} not supported.')
+
+        return self.force_field
+
     def initialise_modeller(self, pdb) -> app.Modeller:
         modeller = app.Modeller(
             pdb.topology,
             pdb.positions
         )
-        modeller.deleteWater()
+        if not self.systemargs.watermodel:
+            modeller.deleteWater()
+        else:
+            modeller.addSolvent(self.force_field, model=self.systemargs.watermodel)
 
         return modeller
 
@@ -171,11 +202,6 @@ class OpenMMSimulation:
         )
 
     def create_system(self, pdb: app.PDBFile):
-        if self.systemargs.forcefield == "amber":  # Create AMBER system
-            ff = app.ForceField('amber14-all.xml', 'amber14/tip3p.xml')
-        else:
-            raise ValueError(f'Force field {self.systemargs.forcefield} not supported.')
-
         """
         nonbondedMethod - The method to use for nonbonded interactions.
                           Allowed values are NoCutoff, CutoffNonPeriodic, CutoffPeriodic, Ewald, or PME.
@@ -183,27 +209,16 @@ class OpenMMSimulation:
         constraints (object=None) – Specifies which bonds and angles should be implemented with constraints.
                                     Allowed values are None, HBonds, AllBonds, or HAngles.
         """
-        return ff.createSystem(
+        return self.force_field.createSystem(
             pdb.topology,
             nonbondedMethod=app.CutoffNonPeriodic,
             nonbondedCutoff=1 * unit.nanometer,
             # constraints = app.AllBonds,
         )
 
-    def setup_system(self):
-        self.check_args()
-        self.make_output_directory()
-        pdb = self.initialise_pdb()
-        peptide_indices = self.get_peptide_indices(pdb)
-        modeller = self.initialise_modeller(pdb)
-        self.write_pdb(pdb, modeller)
-        system = self.create_system(pdb)
-
-        self.systemobjs = SystemObjs(pdb, modeller, peptide_indices, system)
-        return self.systemobjs
-
     def setup_simulation(self):
         self.initialise_simulation()
+        self.save_simulation_metadata()
         if self.systemargs.minimise:
             # initial system energy
             print("\ninitial system energy")
