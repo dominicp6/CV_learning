@@ -25,7 +25,7 @@ SimulationProps = namedtuple("Simulation_Props", "integrator simulation properti
 
 def stringify_named_tuple(obj: namedtuple):
     dict_of_obj = {}
-    for key, value in obj.items():
+    for key, value in obj._asdict().items():
         dict_of_obj[key] = str(value)
 
     return dict_of_obj
