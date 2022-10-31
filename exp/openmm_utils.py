@@ -196,7 +196,7 @@ class OpenMMSimulation:
         if not self.systemargs.watermodel:
             modeller.deleteWater()
         else:
-            modeller.addSolvent(self.force_field, model=self.systemargs.watermodel)
+            modeller.addSolvent(self.force_field, model=self.systemargs.watermodel, padding=1 * unit.nanometer)
 
         return modeller
 
