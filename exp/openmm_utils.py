@@ -14,7 +14,7 @@ import matplotlib.ticker as tkr
 import seaborn as sns
 
 SystemArgs = namedtuple("System_Args",
-                        "pdb forcefield resume duration savefreq stepsize "
+                        "pdb forcefield resume duration savefreq stepsize temperature pressure "
                         "frictioncoeff total_steps steps_per_save nonperiodic gpu minimise precision watermodel")
 
 SystemObjs = namedtuple("System_Objs",
@@ -49,7 +49,9 @@ class OpenMMSimulation:
             "us": unit.microseconds,
             "ns": unit.nanoseconds,
             "ps": unit.picoseconds,
-            "fs": unit.femtoseconds
+            "fs": unit.femtoseconds,
+            "bar": unit.bar,
+            "K": unit.kelvin
         }
 
         # PROPERTIES
@@ -84,6 +86,8 @@ class OpenMMSimulation:
         parser.add_argument("-d", "--duration", default="1ns", help="Duration of simulation")
         parser.add_argument("-f", "--savefreq", default="1ps", help="Interval for all reporters to save data")
         parser.add_argument("-s", "--stepsize", default="2fs", help="Integrator step size")
+        parser.add_argument("-t", "--temperature", default="300K", help="Temperature for Langevin dynamics")
+        parser.add_argument("-p", "--pressure", default="1bar", help="Pressure for MonteCarloBarostat")
         parser.add_argument("-c", "--frictioncoeff", default="1ps",
                             help="Integrator friction coeff [your value]^-1 ie for 0.1fs^-1 put in 0.1fs. "
                                  "The unit but not the value will be converted to its reciprocal.")
@@ -101,6 +105,8 @@ class OpenMMSimulation:
         duration = self.parse_quantity(args.duration)
         savefreq = self.parse_quantity(args.savefreq)
         stepsize = self.parse_quantity(args.stepsize)
+        temperature = self.parse_quantity(args.temperature)
+        pressure = self.parse_quantity(args.pressure)
         frictioncoeff = self.parse_quantity(args.frictioncoeff)
         frictioncoeff = frictioncoeff._value / frictioncoeff.unit
         total_steps = int(duration / stepsize)
@@ -109,8 +115,9 @@ class OpenMMSimulation:
         minimise = args.minimise
         watermodel = args.water
 
-        self.systemargs = SystemArgs(pdb, forcefield, resume, duration, savefreq, stepsize, frictioncoeff, total_steps,
-                                     steps_per_save, nonperiodic, gpu, minimise, precision, watermodel)
+        self.systemargs = SystemArgs(pdb, forcefield, resume, duration, savefreq, stepsize, temperature, pressure,
+                                     frictioncoeff, total_steps, steps_per_save, nonperiodic, gpu, minimise,
+                                     precision, watermodel)
 
         return self.systemargs
 
@@ -153,7 +160,7 @@ class OpenMMSimulation:
         print("[x] Initialised modeller")
         self.write_pdb(pdb, modeller)
         system = self.create_system(pdb)
-        print ("Successfully created system")
+        print("Successfully created system")
 
         self.systemobjs = SystemObjs(pdb, modeller, peptide_indices, system)
         return self.systemobjs
@@ -253,11 +260,11 @@ class OpenMMSimulation:
     def initialise_simulation(self):
         properties = {'CudaDeviceIndex': self.systemargs.gpu, 'Precision': self.systemargs.precision}
 
-        # TODO: decide whether and which barostat to add
+        self.systemobjs.system.addForce(MonteCarloBarostat(self.systemargs.pressure, self.systemargs.temperature))
 
         # Create constant temp integrator
         integrator = openmm.LangevinMiddleIntegrator(
-            300 * unit.kelvin,
+            self.systemargs.temperature,
             self.systemargs.frictioncoeff,
             self.systemargs.stepsize
         )
@@ -270,7 +277,7 @@ class OpenMMSimulation:
             properties
         )
 
-        # TODO: what does this do?
+        # Specify the initial positions to be the positions that were loaded from the PDB file
         simulation.context.setPositions(self.systemobjs.pdb.positions)
         if self.systemargs.resume:
             with open(os.path.join(self.output_dir, self.CHECKPOINT_FN), "rb") as f:
