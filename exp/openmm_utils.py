@@ -13,14 +13,14 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as tkr
 import seaborn as sns
 
-SystemArgs = namedtuple("System Args",
+SystemArgs = namedtuple("System_Args",
                         "pdb forcefield resume duration savefreq stepsize "
                         "frictioncoeff total_steps steps_per_save nonperiodic gpu minimise precision")
 
-SystemObjs = namedtuple("System Objs",
+SystemObjs = namedtuple("System_Objs",
                         "pdb modeller peptide_indices system")
 
-SimulationProps = namedtuple("Simulation Props", "integrator simulation properties")
+SimulationProps = namedtuple("Simulation_Props", "integrator simulation properties")
 
 
 class OpenMMSimulation:
