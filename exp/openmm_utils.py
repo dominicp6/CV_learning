@@ -129,7 +129,7 @@ class OpenMMSimulation:
         else:
             # Make output directory
             pdb_filename = os.path.splitext(os.path.basename(self.systemargs.pdb))[0]
-            output_dir = f"production_{pdb_filename}_{self.systemargs.forcefield}_{datetime.datetime.now().strftime('%H%M%S_%d%m%y')}"
+            output_dir = f"production_{pdb_filename}_{self.systemargs.forcefield}_{datetime.now().strftime('%H%M%S_%d%m%y')}"
             output_dir = os.path.join("outputs", output_dir)
             os.makedirs(output_dir)
 
