@@ -205,13 +205,20 @@ class OpenMMSimulation:
     def setup_simulation(self):
         self.initialise_simulation()
         if self.systemargs.minimise:
+            # initial system energy
+            print("\ninitial system energy")
+            print(self.simulationprops.simulation.context.getState(getEnergy=True).getPotentialEnergy())
             self.simulationprops.simulation.minimizeEnergy()
+            print("\nafter minimization")
+            print(self.simulationprops.simulation.context.getState(getEnergy=True).getPotentialEnergy())
         self.setup_reporters()
 
     def initialise_simulation(self):
         print("Initialising production run...")
 
         properties = {'CudaDeviceIndex': self.systemargs.gpu, 'Precision': self.systemargs.precision}
+
+        # TODO: decide whether and which barostat to add
 
         # Create constant temp integrator
         integrator = openmm.LangevinMiddleIntegrator(
