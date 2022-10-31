@@ -167,7 +167,7 @@ class OpenMMSimulation:
 
     # TODO: updating metadata
     def save_simulation_metadata(self):
-        with open(os.path.join(self.output_dir, self.METADATA_FN+'.json'), 'w') as json_file:
+        with open(os.path.join(self.output_dir, self.METADATA_FN), 'w') as json_file:
             json.dump(stringify_named_tuple(self.systemargs), json_file)
 
     def initialise_pdb(self) -> app.PDBFile:
