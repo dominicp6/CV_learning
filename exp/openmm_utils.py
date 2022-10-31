@@ -235,7 +235,8 @@ class OpenMMSimulation:
             properties
         )
 
-        simulation.context.setPositions(SystemObjs.pdb.positions)
+        # TODO: what does this do?
+        simulation.context.setPositions(self.systemobjs.pdb.positions)
         if SystemArgs.resume:
             with open(os.path.join(self.output_dir, self.CHECKPOINT_FN), "rb") as f:
                 simulation.context.loadCheckpoint(f.read())
