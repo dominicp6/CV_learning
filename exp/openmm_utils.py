@@ -119,7 +119,7 @@ class OpenMMSimulation:
             print(f"Invalid forcefield: {self.systemargs.forcefield}, must be {self.valid_ffs}")
             quit()
 
-        if self.systemargs.watermodel not in self.valid_wms and not None:
+        if self.systemargs.watermodel not in self.valid_wms and not "":
             print(f"Invalid water model: {self.systemargs.watermodel}, must be {self.valid_wms}")
 
         if self.systemargs.resume is not None and not os.path.isdir(self.systemargs.resume):
