@@ -237,7 +237,7 @@ class OpenMMSimulation:
 
         # TODO: what does this do?
         simulation.context.setPositions(self.systemobjs.pdb.positions)
-        if SystemArgs.resume:
+        if self.systemargs.resume:
             with open(os.path.join(self.output_dir, self.CHECKPOINT_FN), "rb") as f:
                 simulation.context.loadCheckpoint(f.read())
                 print("Loaded checkpoint")
