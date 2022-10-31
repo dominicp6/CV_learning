@@ -189,6 +189,7 @@ class OpenMMSimulation:
     def initialise_pdb(self) -> app.PDBFile:
         pdb = app.PDBFile(self.systemargs.pdb)
         if self.systemargs.nonperiodic:
+            print('Setting non-periodic boundary conditions')
             pdb.topology.setPeriodicBoxVectors(None)
 
         return pdb
