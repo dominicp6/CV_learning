@@ -171,7 +171,7 @@ class OpenMMSimulation:
         )
 
     def create_system(self, pdb: app.PDBFile):
-        if self.systemargs.forcefield is "amber":  # Create AMBER system
+        if self.systemargs.forcefield == "amber":  # Create AMBER system
             ff = app.ForceField('amber14-all.xml', 'amber14/tip3p.xml')
         else:
             raise ValueError(f'Force field {self.systemargs.forcefield} not supported.')
