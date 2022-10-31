@@ -23,6 +23,14 @@ SystemObjs = namedtuple("System_Objs",
 SimulationProps = namedtuple("Simulation_Props", "integrator simulation properties")
 
 
+def stringify_named_tuple(obj: namedtuple):
+    dict_of_obj = {}
+    for key, value in obj.items():
+        dict_of_obj[key] = str(value)
+
+    return dict_of_obj
+
+
 class OpenMMSimulation:
 
     def __init__(self):
@@ -160,7 +168,7 @@ class OpenMMSimulation:
     # TODO: updating metadata
     def save_simulation_metadata(self):
         with open(os.path.join(self.output_dir, self.METADATA_FN+'.json'), 'w') as json_file:
-            json.dump(self.systemargs, json_file)
+            json.dump(stringify_named_tuple(self.systemargs), json_file)
 
     def initialise_pdb(self) -> app.PDBFile:
         pdb = app.PDBFile(self.systemargs.pdb)
