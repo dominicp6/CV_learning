@@ -106,7 +106,7 @@ class OpenMMSimulation:
             print(f"Invalid forcefield: {self.systemargs.forcefield}, must be {self.valid_ffs}")
             quit()
 
-        if not os.path.isdir(self.systemargs.resume):
+        if self.systemargs.resume is not None and not os.path.isdir(self.systemargs.resume):
             print(f"Production directory to resume is not a directory: {self.systemargs.resume}")
             quit()
 
