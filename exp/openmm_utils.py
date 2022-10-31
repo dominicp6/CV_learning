@@ -139,14 +139,21 @@ class OpenMMSimulation:
                 quit()
 
     def setup_system(self):
+        print("Setting up system...")
         self.check_args()
+        print("[x] Checked valid args")
         self.make_output_directory()
+        print("[x] Made output dir")
         pdb = self.initialise_pdb()
         peptide_indices = self.get_peptide_indices(pdb)
+        print("[x] Initialised PDB")
         self.initialise_forcefield()
+        print("[x] Initialised force field")
         modeller = self.initialise_modeller(pdb)
+        print("[x] Initialised modeller")
         self.write_pdb(pdb, modeller)
         system = self.create_system(pdb)
+        print ("Successfully created system")
 
         self.systemobjs = SystemObjs(pdb, modeller, peptide_indices, system)
         return self.systemobjs
@@ -167,8 +174,10 @@ class OpenMMSimulation:
 
     # TODO: updating metadata
     def save_simulation_metadata(self):
+        args_as_dict = stringify_named_tuple(self.systemargs)
+        print(args_as_dict)
         with open(os.path.join(self.output_dir, self.METADATA_FN), 'w') as json_file:
-            json.dump(stringify_named_tuple(self.systemargs), json_file)
+            json.dump(args_as_dict, json_file)
 
     def initialise_pdb(self) -> app.PDBFile:
         pdb = app.PDBFile(self.systemargs.pdb)
@@ -225,20 +234,23 @@ class OpenMMSimulation:
         )
 
     def setup_simulation(self):
+        print("Setting up simulation...")
         self.initialise_simulation()
+        print("[x] Initialised simulation")
         self.save_simulation_metadata()
         if self.systemargs.minimise:
+            print("Running energy minimisation...")
             # initial system energy
             print("\ninitial system energy")
             print(self.simulationprops.simulation.context.getState(getEnergy=True).getPotentialEnergy())
             self.simulationprops.simulation.minimizeEnergy()
             print("\nafter minimization")
             print(self.simulationprops.simulation.context.getState(getEnergy=True).getPotentialEnergy())
+            print("[x] Finished minimisation")
         self.setup_reporters()
+        print("Successfully setup simulation")
 
     def initialise_simulation(self):
-        print("Initialising production run...")
-
         properties = {'CudaDeviceIndex': self.systemargs.gpu, 'Precision': self.systemargs.precision}
 
         # TODO: decide whether and which barostat to add
