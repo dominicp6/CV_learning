@@ -49,8 +49,8 @@ class Dihedrals:
     def __init__(
         self,
         dihedrals: list[DihedralFeature],
-        offsets: list[float],
-        coefficients: list[float],
+        offsets: np.array,
+        coefficients: np.array,
     ):
         # TODO: init with coefficients
         self.dihedral_list = []

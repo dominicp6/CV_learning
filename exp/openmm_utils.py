@@ -30,6 +30,7 @@ def stringify_named_tuple(obj: namedtuple):
 
     return dict_of_obj
 
+# TODO: option to save topology file with no water for convenience
 
 class OpenMMSimulation:
 
