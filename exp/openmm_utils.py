@@ -12,6 +12,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as tkr
 import seaborn as sns
+from pdbfixer import PDBFixer
 
 SystemArgs = namedtuple("System_Args",
                         "pdb forcefield resume duration savefreq stepsize temperature pressure "
@@ -29,6 +30,43 @@ def stringify_named_tuple(obj: namedtuple):
         dict_of_obj[key] = str(value)
 
     return dict_of_obj
+
+
+def fix_pdb(path_to_file):
+    print("Creating PDBFixer...")
+    fixer = PDBFixer(path_to_file)
+    print("Finding missing residues...")
+    fixer.findMissingResidues()
+
+    chains = list(fixer.topology.chains())
+    keys = fixer.missingResidues.keys()
+    for key in list(keys):
+        chain = chains[key[0]]
+        if key[1] == 0 or key[1] == len(list(chain.residues())):
+            del fixer.missingResidues[key]
+
+    print("Finding nonstandard residues...")
+    fixer.findNonstandardResidues()
+    print("Replacing nonstandard residues...")
+    fixer.replaceNonstandardResidues()
+    print("Removing heterogens...")
+    fixer.removeHeterogens(keepWater=True)
+
+    print("Finding missing atoms...")
+    fixer.findMissingAtoms()
+    print("Adding missing atoms...")
+    fixer.addMissingAtoms()
+    print("Adding missing hydrogens...")
+    fixer.addMissingHydrogens(7)
+    print("Writing PDB file...")
+
+    app.pdbfile.PDBFile.writeFile(
+        fixer.topology,
+        fixer.positions,
+        open(f"{path_to_file[:-4]}_fixed.pdb",
+             "w"),
+        keepIds=True)
+
 
 # TODO: option to save topology file with no water for convenience
 
@@ -263,7 +301,7 @@ class OpenMMSimulation:
         properties = {'CudaDeviceIndex': self.systemargs.gpu, 'Precision': self.systemargs.precision}
 
         # TODO: add barostat
-        #self.systemobjs.system.addForce(openmm.MonteCarloBarostat(self.systemargs.pressure, self.systemargs.temperature))
+        # self.systemobjs.system.addForce(openmm.MonteCarloBarostat(self.systemargs.pressure, self.systemargs.temperature))
 
         # Create constant temp integrator
         integrator = openmm.LangevinMiddleIntegrator(
