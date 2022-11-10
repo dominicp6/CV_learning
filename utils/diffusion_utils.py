@@ -16,7 +16,7 @@ import numpy.typing as npt
 from pyemma.coordinates.clustering import RegularSpaceClustering, KmeansClustering
 
 from MarkovStateModel import MSM
-import general_utils as gutl
+import utils.general_utils as gutl
 
 # TODO: axs type
 def implied_timescale_analysis(
@@ -264,16 +264,24 @@ def free_energy_estimate(
     return free_energy, robust_coordinates
 
 
-def free_energy_estimate_2D(samples: np.array, beta: float, bins: int = 300):
-    fig, axs = plt.subplots(1, 1)
-    h, xedges, yedges, quadmesh = axs.hist2d(samples[:, 0], samples[:, 1], bins=bins)
+def free_energy_estimate_2D(ax: object, samples: np.array, features: tuple[str], feature_dict: dict, beta: float,
+                            bins: int = 300):
+
+    # TODO: some robustness improvements for edge cases where there are degenerate feature names
+    plot_data = []
+    for feature in features:
+        for idx, feat_name in enumerate(feature_dict.keys()):
+            if feat_name == feature:
+                plot_data.append(samples[:, idx])
+
+    h, xedges, yedges, quadmesh = ax.hist2d(plot_data[0], plot_data[1], bins=bins)
     total_counts = np.sum(h)
     with np.errstate(divide="ignore"):
         # TODO: fix
         free_energy = -(1 / beta) * np.log(h / total_counts + 0.000000000001)
         free_energy = np.nan_to_num(free_energy, nan=0)
 
-    return free_energy - np.min(free_energy), fig, axs, xedges, yedges
+    return free_energy - np.min(free_energy), xedges, yedges
 
 
 def project_points_to_line(

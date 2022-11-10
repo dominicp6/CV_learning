@@ -15,7 +15,7 @@ import scipy.interpolate as interpolate
 import matplotlib.pyplot as plt
 from scipy.ndimage.filters import gaussian_filter
 
-from general_utils import select_lowest_minima
+from utils.general_utils import select_lowest_minima
 from potentials import ring_double_well_potential
 
 

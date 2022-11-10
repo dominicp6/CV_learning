@@ -10,7 +10,7 @@ import numpy as np
 from multiprocessing import Process, Manager, cpu_count
 
 
-def compute_torsion_mdraj(dihedral_array, traj, angle_index):
+def compute_dihedral_mdraj(dihedral_array, traj, angle_index):
     """
     Compute torsion angle defined by four atoms.
 
@@ -72,7 +72,7 @@ def compute_dihedral_trajectory(pdb_file: str, trajectory: str, dihedrals: list[
         processes = []
         for dihedral in dihedrals:
             p = Process(
-                target=compute_torsion_mdraj,
+                target=compute_dihedral_mdraj,
                 args=(dihedral_trajectories, aligned_traj, dihedral),
             )
             p.start()

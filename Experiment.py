@@ -19,24 +19,18 @@ import mdtraj as md
 import mdtraj  # todo: remove
 import pandas as pd
 import pyemma
+import deeptime
 import numpy as np
 import matplotlib.pyplot as plt
-import openmm.unit as unit
 
 from KramersRateEvaluator import KramersRateEvaluator
 from Dihedrals import Dihedrals
 from analine_free_energy import compute_dihedral_trajectory
-from diffusion_utils import free_energy_estimate_2D
+from utils.diffusion_utils import free_energy_estimate_2D
 import pydiffmap.diffusion_map as dfm
-import mdfeature.features as features
-
-# noinspection PyUnresolvedReferences
-unit_labels = {
-    "us": unit.microseconds,
-    "ns": unit.nanoseconds,
-    "ps": unit.picoseconds,
-    "fs": unit.femtoseconds,
-}
+import mdfeature.features as feat
+from utils.openmm_utils import parse_quantity
+from utils.plotting_functions import init_plot
 
 
 #
@@ -156,31 +150,21 @@ def check_and_remove_nans(data: np.array, axis: int = 1) -> np.array:
 #     print(A)
 
 
-def parse_quantity(s: str):
-    try:
-        u = s.lstrip("0123456789.")
-        v = s[: -len(u)]
-        return unit.Quantity(float(v), unit_labels[u])
-    except Exception:
-        raise ValueError(f"Invalid quantity: {s}")
-
-
 def load_pdb(loc: str) -> md.Trajectory:
-    print(glob.glob(os.path.join(loc)))
     pdb_files = glob.glob(os.path.join(loc, "*.pdb"))
     assert (
-            len(pdb_files) <= 1
+        len(pdb_files) <= 1
     ), f"Read error: more than one PDB file found in the directory ({pdb_files})."
     assert len(pdb_files) != 0, f"Read error: no PDB files found in directory."
     return md.load_pdb(pdb_files[0])
 
 
 def load_trajectory(
-        loc: str, topology: Union[str, md.Trajectory, md.Topology]
+    loc: str, topology: Union[str, md.Trajectory, md.Topology]
 ) -> md.Trajectory:
     traj_files = glob.glob(os.path.join(loc, "*.dcd"))
     assert (
-            len(traj_files) <= 1
+        len(traj_files) <= 1
     ), f"Read error: more than one traj file found in the directory ({traj_files})."
     assert len(traj_files) != 0, f"Read error: no traj files found in directory."
     return mdtraj.load(traj_files[0], top=topology)
@@ -204,16 +188,18 @@ def load_dihedral_trajectory(loc: str, dihedral_pickle_file: str) -> list:
     return dihedral_traj
 
 
-def initialise_featurizer(default_torsions: list, topology) -> pyemma.coordinates.featurizer:
+def initialise_featurizer(
+    dihedral_features: list, topology
+) -> pyemma.coordinates.featurizer:
     # To check
     featurizer = pyemma.coordinates.featurizer(topology)
-    dihedral_indices = features.create_torsions_list(
+    dihedral_indices = feat.create_torsions_list(
         atoms=topology.n_atoms,
         size=0,
-        append_to=default_torsions,
+        append_to=dihedral_features,
         print_list=False,
     )
-    featurizer.add_dihedrals(dihedral_indices, cossin=True)
+    featurizer.add_dihedrals(dihedral_indices)  # cossin = True
     featurizer.describe()
     return featurizer
 
@@ -235,7 +221,7 @@ def assert_kwarg(kwargs: dict, kwarg: str, CV: str):
     try:
         assert kwargs[kwarg] is not None
     except Exception:
-        raise ValueError(f'{kwarg} must be provided to {CV}')
+        raise ValueError(f"{kwarg} must be provided to {CV}")
 
 
 def write_metadynamics_line(height: float, pace: int, CV: str, file):
@@ -244,16 +230,16 @@ def write_metadynamics_line(height: float, pace: int, CV: str, file):
     arg_list.append(f"{CV}_%d" % 0)
     sigma_list.append(str(0.1))
     output = (
-            "METAD ARG=%s SIGMA=%s HEIGHT=%s FILE=HILLS PACE=%s LABEL=metad"
-            % (",".join(arg_list), ",".join(sigma_list), str(height), str(pace))
-            + " \\n\\"
+        "METAD ARG=%s SIGMA=%s HEIGHT=%s FILE=HILLS PACE=%s LABEL=metad"
+        % (",".join(arg_list), ",".join(sigma_list), str(height), str(pace))
+        + " \\n\\"
     )
     print(output)
     file.writelines(output + "\n")
     output = (
-            "PRINT ARG=%s,metad.bias STRIDE=%s FILE=COLVAR"
-            % (",".join(arg_list), str(pace))
-            + " \\n"
+        "PRINT ARG=%s,metad.bias STRIDE=%s FILE=COLVAR"
+        % (",".join(arg_list), str(pace))
+        + " \\n"
     )
     print(output + '"')
     file.writelines(output + '"' + "\n")
@@ -261,16 +247,11 @@ def write_metadynamics_line(height: float, pace: int, CV: str, file):
 
 
 class Experiment:
-
-    # TODO: fix bug when default torsions = None
-
     def __init__(
-            self,
-            location: str,
-            default_torsions: list = None,
-            dihedral_pickle_file: str = None,
-            dihedrals: list[list] = None,
-            metad_bias_file=None,
+        self,
+        location: str,
+        feature_dict: dict = None,
+        metad_bias_file=None,
     ):
         # ================== DEFAULTS =====================
         self.DM_DEFAULTS = {
@@ -312,110 +293,62 @@ class Experiment:
             self.pdb,
             self.topology,
             self.traj,
-            self.dihedral_traj,  # todo: check dihedrals
             self.num_frames,
-        ) = self._init_datafiles(location, dihedral_pickle_file, dihedrals)
+        ) = self._init_datafiles(location)
+        (self.metad_weights, self.bias_potential_traj) = self.__init_biasfiles(
+            metad_bias_file
+        )
         (
-            self.metad_weights,
-            self.bias_potential_traj
-        ) = self.__init_biasfiles(metad_bias_file)
-        (
+            self.feature_dict,
             self.featurizer,
             self.featurized_traj,
             self.feature_means,
             self.feature_stds,
-        ) = self.__init_features(default_torsions)
+            self.num_features,
+            self.features_provided,
+        ) = self.__init_features(feature_dict)
 
         self.CVs = {"PCA": None, "TICA": None, "VAMP": None, "DM": None}
         self.kre = KramersRateEvaluator()
         self.discrete_traj = None
 
-    def ramachandran_plot(
-            self,
-            data_fraction: float = 1.0,
-            bins: int = 100,
-            nan_threshold: int = 50,
-            rotate: bool = False,
-            low_threshold: float = None,
-            save_fig: bool = False,
-            save_name="ramachandran_plot.pdf",
+    def free_energy_plot(
+        self,
+        features: tuple[str],
+        data_fraction: float = 1.0,
+        bins: int = 100,
+        nan_threshold: int = 50,
+        save_name="free_energy_plot.pdf",
     ):
-        # todo: clean up and refactor plotting code
-        if self.metad_weights is None:
-            dihedral_traj = check_and_remove_nans(self.dihedral_traj)
-            final_iteration = int(data_fraction * len(dihedral_traj))
+        if not self.features_provided:
+            raise ValueError(
+                "Cannot construct ramachandran plot for an unfeaturized trajectory. "
+                "Try reinitializing Experiment object with features defined."
+            )
+        else:
+            assert (
+                len(features) == 2
+            ), "Only two features can be used for a free energy plot."
+            fig, ax = init_plot(
+                "Free Energy Surface", f"${features[0]}$", f"${features[1]}$"
+            )
             free_energy, xedges, yedges = free_energy_estimate_2D(
-                dihedral_traj[:final_iteration],
+                ax,
+                self.featurized_traj[: int(data_fraction * self.num_frames)],
+                features,
+                self.feature_dict,
                 self.beta,
                 bins=bins,
-                weights=slice_array(self.metad_weights, final_iteration),
             )
-            fig, ax = plt.subplots()
-            if rotate is True:
-                free_energy = free_energy.T
-            if low_threshold is None:
-                masked_free_energy = np.ma.array(
-                    free_energy, mask=(free_energy > nan_threshold)
-                )
-            else:
-                masked_free_energy = np.ma.array(
-                    free_energy,
-                    mask=(
-                        np.logical_or(
-                            (free_energy > nan_threshold), (free_energy < low_threshold)
-                        )
-                    ),
-                )
+            masked_free_energy = np.ma.array(
+                free_energy, mask=(free_energy > nan_threshold)
+            )
             im = ax.pcolormesh(xedges, yedges, masked_free_energy)
             cbar = plt.colorbar(im)
-            cbar.set_label(r"$\mathcal{F}(\phi,\psi)$ / kJ mol$^{-1}$")
-            plt.xticks(np.arange(-3, 4, 1))
-            plt.xlabel(r"$\phi$")
-            plt.ylabel(r"$\psi$")
+            cbar.set_label(f"$F({features[0]},{features[1]})$ / kJ mol$^{{-1}}$")
             plt.gca().set_aspect("equal")
-        else:
-            xyz = check_and_remove_nans(
-                np.hstack([self.dihedral_traj, np.array([self.bias_potential_traj]).T])
-            )
-            x = xyz[:, 0]
-            y = xyz[:, 1]
-            z = xyz[:, 2]
-            fe = -z + np.max(z)
-            fig, ax = plt.subplots()
-            # set level increment every unit of kT
-            num_levels = int(np.floor((np.max(fe) - np.min(fe)) / 2.5))
-            levels = [k * 2.5 for k in range(num_levels + 2)]
-            if rotate is True:
-                cntr2 = ax.tricontourf(
-                    y, x, -z + np.max(z), levels=levels, cmap="RdBu_r"
-                )
-                ax.tricontour(y, x, -z, levels=levels, linewidths=0.5, colors="k")
-            else:
-                cntr2 = ax.tricontourf(
-                    x, y, -z + np.max(z), levels=levels, cmap="RdBu_r"
-                )
-                ax.tricontour(x, y, -z, levels=levels, linewidths=0.5, colors="k")
-            plt.xlabel(r"$\phi$")
-            plt.ylabel(r"$\psi$")
-            plt.gca().set_aspect("equal")
-            cbar = fig.colorbar(cntr2, ax=ax)
-            cbar.set_label(r"$\mathcal{F}(\phi,\psi)$ / kJ mol$^{-1}$")
-            ax.set(xlim=(-np.pi, np.pi), ylim=(-np.pi, np.pi))
-            plt.xticks(np.arange(-3, 4, 1))
-            plt.subplots_adjust(hspace=0.5)
 
-        if save_fig:
-            plt.savefig(save_name, format="pdf", bbox_inches="tight")
-        plt.show()
-
-        return masked_free_energy, pd.DataFrame(
-            np.vstack(
-                [
-                    dihedral_traj,
-                ]
-            ),
-            columns=["phi", "psi", "weight"],
-        )
+            return None
 
     def implied_timescale_analysis(self, max_lag: int = 10, k: int = 10):
         if self.discrete_traj is None:
@@ -424,18 +357,33 @@ class Experiment:
         its = pyemma.msm.its(self.discrete_traj, lags=max_lag)
         pyemma.plots.plot_implied_timescales(its)
 
-    def compute_cv(self, CV: str, dim: int, stride: int = 1, featurized: bool = True, **kwargs):
+    def compute_cv(self, CV: str, dim: int, stride: int = 1, **kwargs):
         assert CV in self.CVs.keys(), f"Method '{CV}' not in {self.CVs.keys()}"
+        # TODO: implement stride
         t0 = time()
-        trajectory = self.featurized_traj if featurized else self.traj
+        # Trajectory is either featurized or unfeaturized (cartesian coords), depending on object initialisation.
+        trajectory = self.featurized_traj if self.features_provided else self.traj
         if CV == "PCA":
-            self.CVs[CV] = pyemma.coordinates.pca(trajectory, dim=dim, stride=stride)
+            self.CVs[CV] = pyemma.coordinates.pca(
+                trajectory.xyz, dim=dim, stride=stride
+            )
         elif CV == "TICA":
-            assert_kwarg(kwargs, kwarg='lag', CV=CV)
-            self.CVs[CV] = pyemma.coordinates.tica(trajectory, dim=dim, stride=stride, kinetic_map=True, **kwargs)
+            assert_kwarg(kwargs, kwarg="lagtime", CV=CV)
+            # other kwargs: epsilon, var_cutoff, scaling, observable_transform
+            self.CVs[CV] = deeptime.decomposition.TICA(dim=dim, **kwargs).fit_fetch(
+                trajectory.xyz
+            )
         elif CV == "VAMP":
-            assert_kwarg(kwargs, kwarg='lag', CV=CV)
-            self.CVs[CV] = pyemma.coordinates.vamp(trajectory, dim=dim, stride=stride, kinetic_map=True, **kwargs)
+            assert_kwarg(kwargs, kwarg="lagtime", CV=CV)
+            # other kwargs: epsilon, var_cutoff, scaling, epsilon, observable_transform
+            self.CVs[CV] = deeptime.decomposition.VAMP(dim=dim, **kwargs).fit_fetch(
+                trajectory.xyz
+            )
+        elif CV == "DMD":
+            # other kwargs: mode, rank, exact
+            self.CVs[CV] = deeptime.decomposition.DMD(**kwargs).fit_fetch(
+                trajectory.xyz
+            )
         elif CV == "DM":
             if kwargs is None:
                 kwargs = self.DM_DEFAULTS
@@ -445,7 +393,7 @@ class Experiment:
         print(f"Computed CV in {round(t1 - t0, 3)}s.")
 
     def analyse_kramers_rate(
-            self, CV: str, dimension: int, lag: int, sigmaD: float, sigmaF: float
+        self, CV: str, dimension: int, lag: int, sigmaD: float, sigmaF: float
     ):
         self.kre.fit(
             self._get_cv(CV, dimension),
@@ -461,49 +409,60 @@ class Experiment:
         assert CV in self.CVs.keys(), f"Method '{CV}' not in {self.CVs.keys()}"
         if self.CVs[CV] is None:
             raise ValueError(f"{CV} CVs not computed.")
-        if CV is 'PCA' or 'VAMP':
+        if CV in ["PCA", "VAMP"]:
             return self.CVs[CV].get_output()[0][:, dim]
-        elif CV is 'TICA':
+        elif CV == "TICA":
             return self.CVs[CV].eigenvectors[:, dim]
-        elif CV is 'DM':
+        elif CV == "DM":
             return self.CVs[CV].evecs[:, dim]
         else:
             raise NotImplementedError
 
     def feature_eigenvector(self, CV: str, dim: int) -> np.array:
-        return self._lstsq_traj_with_features(traj=self._get_cv(CV, dim))
+        if not self.features_provided:
+            raise ValueError(
+                "Cannot computed a feature eigenvector for an unfeaturized trajectory. "
+                "Try reinitializing Experiment object with features defined."
+            )
+        else:
+            return self._lstsq_traj_with_features(traj=self._get_cv(CV, dim))
 
     def _lstsq_traj_with_features(self, traj: np.array) -> np.array:
-        a = self.featurized_traj
-        a = np.c_[np.ones(self.num_frames), a]
-        print("a_shape", a.shape)
-        c, err, _, _ = np.linalg.lstsq(a[::2, :], traj, rcond=None)  # TODO: revert back
+        feat_traj = self.featurized_traj
+        feat_traj = np.c_[np.ones(self.num_frames), feat_traj]
+        coeffs, err, _, _ = np.linalg.lstsq(feat_traj, traj, rcond=None)
 
-        return c[1:]
+        return coeffs[1:]
 
     def create_plumed_metadynamics_script(
-            self,
-            CV: str,
-            filename: str = None,
-            gaussian_height: float = 0.2,
-            gaussian_pace: int = 1000,
+        self,
+        CV: str,
+        filename: str = None,
+        gaussian_height: float = 0.2,
+        gaussian_pace: int = 1000,
     ):
-        assert CV in self.CVs.keys(), f"Method '{CV}' not in {self.CVs.keys()}"
-        f = open("./plumed.py" if filename is None else f"./{filename}.py", "w")
-        output = 'plumed_script="RESTART ' + "\\n\\"
-        f.write(output + "\n")
-        print(output)
-        dihedral_features = Dihedrals(
-            dihedrals=self.featurizer.active_features,
-            offsets=self.feature_means,
-            coefficients=self.feature_eigenvector(CV, dim=0),
-        )
-        dihedral_features.write_torsion_labels(file=f)
-        dihedral_features.write_transform_labels(file=f)
-        dihedral_features.write_combined_label(CV=CV, file=f)
-        write_metadynamics_line(
-            height=gaussian_height, pace=gaussian_pace, CV=CV, file=f
-        )
+        if not self.features_provided:
+            raise ValueError(
+                "Cannot create PLUMED metadynamics script for an unfeaturized trajectory. "
+                "Try reinitializing Experiment object with features defined."
+            )
+        else:
+            assert CV in self.CVs.keys(), f"Method '{CV}' not in {self.CVs.keys()}"
+            f = open("./plumed.py" if filename is None else f"./{filename}.py", "w")
+            output = 'plumed_script="RESTART ' + "\\n\\"
+            f.write(output + "\n")
+            print(output)
+            dihedral_features = Dihedrals(
+                dihedrals=self.featurizer.active_features,
+                offsets=self.feature_means,
+                coefficients=self.feature_eigenvector(CV, dim=0),
+            )
+            dihedral_features.write_torsion_labels(file=f)
+            dihedral_features.write_transform_labels(file=f)
+            dihedral_features.write_combined_label(CV=CV, file=f)
+            write_metadynamics_line(
+                height=gaussian_height, pace=gaussian_pace, CV=CV, file=f
+            )
 
     # ====================== INIT HELPERS =================================
     @staticmethod
@@ -521,7 +480,7 @@ class Experiment:
                 raise ValueError(f"Key {key} not found in the metadata file.")
 
         temperature, duration, savefreq, stepsize = (
-            values["temperature"],
+            parse_quantity(values["temperature"]),
             parse_quantity(values["duration"]),
             parse_quantity(values["savefreq"]),
             parse_quantity(values["stepsize"]),
@@ -532,31 +491,22 @@ class Experiment:
 
         return temperature, duration, savefreq, stepsize, iterations, beta
 
-    def _init_datafiles(self, location, dihedral_pickle_file, dihedrals):
+    def _init_datafiles(self, location: str):
         """
         Reads molecular system and trajectory data from file
         """
         pdb = load_pdb(location)
         topology = pdb.topology
         traj = load_trajectory(location, topology)
-        if dihedral_pickle_file is not None:
-            dihedral_traj = load_dihedral_trajectory(
-                location, dihedral_pickle_file
-            )
-        else:
-            dihedral_traj = compute_dihedral_traj(location, dihedrals)
-        assert len(traj) > 0, "Trajectory is empty."
-        assert len(dihedral_traj) > 0, "Dihedral trajectory is empty."
-
-        num_frames = len(self.traj)
-        assert (
-                np.abs(num_frames - int(self.duration / self.savefreq)) <= 1
-        ), f"duration ({self.duration}) and savefreq ({self.savefreq}) incompatible with number of conformations " \
-           f"found in trajectory (got {num_frames}, expected {int(self.duration / self.savefreq)})."
+        num_frames = len(traj)
+        assert np.abs(num_frames - int(self.duration / self.savefreq)) <= 1, (
+            f"duration ({self.duration}) and savefreq ({self.savefreq}) incompatible with number of conformations "
+            f"found in trajectory (got {num_frames}, expected {int(self.duration / self.savefreq)})."
+        )
 
         print("Successfully initialised datafiles.")
 
-        return pdb, topology, traj, dihedral_traj, num_frames
+        return pdb, topology, traj, num_frames
 
     def __init_biasfiles(self, metad_bias_file):
         """
@@ -564,31 +514,58 @@ class Experiment:
         """
         if metad_bias_file is not None:
             metad_weights, bias_potential_traj = self._load_metad_bias(metad_bias_file)
-            assert len(metad_weights) == len(
-                self.traj
-            ), f"metadynamics weights (len {len(metad_weights)}) and trajectory (len {len(self.traj)}) must have the" \
-               f" same length."
+            assert len(metad_weights) == len(self.traj), (
+                f"metadynamics weights (len {len(metad_weights)}) and trajectory (len {len(self.traj)}) must have the"
+                f" same length."
+            )
+            print("Successfully initialised metadynamics bias files.")
         else:
-            metad_weights = None
+            metad_weights, bias_potential_traj = None, None
+            print(
+                "No metadynamics bias files supplied; assuming an unbiased trajectory."
+            )
 
         return metad_weights, bias_potential_traj
 
-    def __init_features(self, default_torsions):
+    def __init_features(self, features: Union[dict, None]):
         """
         Featurises the trajectory according to specified features
         """
-        featurizer = initialise_featurizer(default_torsions)
-        featurized_traj = featurizer.transform(self.traj)
-        feature_means = np.mean(featurized_traj, axis=0)
-        feature_stds = np.std(featurized_traj, axis=0)
-        print("Successfully featurized trajectory.")
+        if features:
+            featurizer = initialise_featurizer(list(features.values()), self.topology)
+            featurized_traj = featurizer.transform(self.traj)
+            feature_means = np.mean(featurized_traj, axis=0)
+            feature_stds = np.std(featurized_traj, axis=0)
+            num_features = len(features)
+            features_provided = True
+            print("Successfully featurized trajectory.")
+        else:
+            featurizer, featurized_traj, feature_means, feature_stds, num_features = (
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            features_provided = False
+            print(
+                "No features provided; trajectory defined with cartesian coordinates (not recommended)."
+            )
 
-        return featurizer, featurized_traj, feature_means, feature_stds
+        return (
+            features,
+            featurizer,
+            featurized_traj,
+            feature_means,
+            feature_stds,
+            num_features,
+            features_provided,
+        )
 
     def _load_metad_bias(self, bias_file: str, col_idx: int = 2) -> (list, list):
         colvar = np.genfromtxt(bias_file, delimiter=" ")
         assert (
-                col_idx < colvar.shape[1]
+            col_idx < colvar.shape[1]
         ), "col_idx must not exceed 1 less than the number of columns in the bias file"
         bias_potential_traj = colvar[:, col_idx]  # [::500][:-1]
         weights = np.exp(self.beta * bias_potential_traj)

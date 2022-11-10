@@ -15,7 +15,7 @@ import numpy as np
 from scipy.signal import find_peaks
 import numpy.typing as npt
 
-from diffusion_utils import (
+from utils.diffusion_utils import (
     free_energy_estimate,
     project_points_to_line,
     free_energy_estimate_2D,

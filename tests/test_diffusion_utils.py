@@ -1,6 +1,6 @@
 import numpy as np
 
-from diffusion_utils import compute_well_integrand, compute_well_integrand_from_potential, compute_barrier_integrand_from_potential, compute_well_and_barrier_integrals, project_points_to_line, relabel_trajectory_by_coordinate_chronology, calculate_cni, calculate_c
+from utils.diffusion_utils import compute_well_integrand, compute_well_integrand_from_potential, compute_barrier_integrand_from_potential, compute_well_and_barrier_integrals, project_points_to_line, relabel_trajectory_by_coordinate_chronology, calculate_cni, calculate_c
 
 
 def test_compute_well_integrand():

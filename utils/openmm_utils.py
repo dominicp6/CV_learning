@@ -23,6 +23,17 @@ SystemObjs = namedtuple("System_Objs",
 
 SimulationProps = namedtuple("Simulation_Props", "integrator simulation properties")
 
+# basic quantity string parsing ("1.2ns" -> openmm.Quantity)
+# noinspection PyUnresolvedReferences
+unit_labels = {
+    "us": unit.microseconds,
+    "ns": unit.nanoseconds,
+    "ps": unit.picoseconds,
+    "fs": unit.femtoseconds,
+    "bar": unit.bar,
+    "K": unit.kelvin
+}
+
 
 def stringify_named_tuple(obj: namedtuple):
     dict_of_obj = {}
@@ -70,6 +81,18 @@ def fix_pdb(path_to_file):
 
 # TODO: option to save topology file with no water for convenience
 
+def parse_quantity(s: str):
+    try:
+        u = s.lstrip('0123456789.')
+        v = s[:-len(u)]
+        return unit.Quantity(
+            float(v),
+            unit_labels[u]
+        )
+    except Exception:
+        raise ValueError(f"Invalid quantity: {s}")
+
+
 class OpenMMSimulation:
 
     def __init__(self):
@@ -83,33 +106,12 @@ class OpenMMSimulation:
         self.valid_precision = ['single', 'mixed', 'double']
         self.valid_wms = ['tip3p', 'tip3pfb', 'spce', 'tip4pew', 'tip4pfb', 'tip5p']
 
-        # basic quantity string parsing ("1.2ns" -> openmm.Quantity)
-        self.unit_labels = {
-            "us": unit.microseconds,
-            "ns": unit.nanoseconds,
-            "ps": unit.picoseconds,
-            "fs": unit.femtoseconds,
-            "bar": unit.bar,
-            "K": unit.kelvin
-        }
-
         # PROPERTIES
         self.systemargs = None
         self.systemobjs = None
         self.simulationprops = None
         self.output_dir = None
         self.force_field = None
-
-    def parse_quantity(self, s: str):
-        try:
-            u = s.lstrip('0123456789.')
-            v = s[:-len(u)]
-            return unit.Quantity(
-                float(v),
-                self.unit_labels[u]
-            )
-        except Exception:
-            raise ValueError(f"Invalid quantity: {s}")
 
     def parse_args(self):
         parser = argparse.ArgumentParser(description='Production run for an equilibrated biomolecule.')
@@ -141,12 +143,12 @@ class OpenMMSimulation:
         precision = args.pr.lower()
         resume = args.resume
         gpu = args.gpu
-        duration = self.parse_quantity(args.duration)
-        savefreq = self.parse_quantity(args.savefreq)
-        stepsize = self.parse_quantity(args.stepsize)
-        temperature = self.parse_quantity(args.temperature)
-        pressure = self.parse_quantity(args.pressure)
-        frictioncoeff = self.parse_quantity(args.frictioncoeff)
+        duration = parse_quantity(args.duration)
+        savefreq = parse_quantity(args.savefreq)
+        stepsize = parse_quantity(args.stepsize)
+        temperature = parse_quantity(args.temperature)
+        pressure = parse_quantity(args.pressure)
+        frictioncoeff = parse_quantity(args.frictioncoeff)
         frictioncoeff = frictioncoeff._value / frictioncoeff.unit
         total_steps = int(duration / stepsize)
         steps_per_save = int(savefreq / stepsize)
@@ -212,7 +214,7 @@ class OpenMMSimulation:
             # Make output directory
             pdb_filename = os.path.splitext(os.path.basename(self.systemargs.pdb))[0]
             output_dir = f"production_{pdb_filename}_{self.systemargs.forcefield}_{datetime.now().strftime('%H%M%S_%d%m%y')}"
-            output_dir = os.path.join("outputs", output_dir)
+            output_dir = os.path.join("../exp/outputs", output_dir)
             os.makedirs(output_dir)
 
         self.output_dir = output_dir

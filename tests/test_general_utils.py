@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.special import erf
 
-from general_utils import (
+from utils.general_utils import (
     replace_inf_with_nan,
     rms_interval,
     vector_rmsd,

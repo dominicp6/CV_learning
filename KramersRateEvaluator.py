@@ -32,9 +32,7 @@ from pyemma.coordinates.clustering import RegularSpaceClustering, KmeansClusteri
 import matplotlib as plt
 
 from MarkovStateModel import MSM
-import diffusion_utils as utl
-import plot_utils as pltutl
-import general_utils as gutl
+from utils import diffusion_utils as utl, general_utils as gutl, plot_utils as pltutl
 
 type_kramers_rates = list[tuple[tuple[int, int], float]]
 
