@@ -34,6 +34,8 @@ unit_labels = {
     "K": unit.kelvin
 }
 
+# TODO: make it so that metadata is produced in valid formatting (without spaces)
+# TODO: automatically produce no water topology file
 
 def stringify_named_tuple(obj: namedtuple):
     dict_of_obj = {}
