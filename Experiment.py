@@ -12,7 +12,7 @@ import os
 import glob
 import json
 from time import time
-from typing import Union
+from typing import Union, Optional
 
 import dill
 import mdtraj as md
@@ -30,9 +30,9 @@ from utils.diffusion_utils import free_energy_estimate_2D
 import pydiffmap.diffusion_map as dfm
 import mdfeature.features as feat
 from utils.openmm_utils import parse_quantity
-from utils.plotting_functions import init_plot
+from utils.plotting_functions import init_plot, save_fig
 
-
+# TODO: think what is happening to water molecules in the trajectory
 #
 # def free_energy_estimate(samples, beta, minimum_counts=50, bins=200):
 #     # histogram
@@ -112,34 +112,6 @@ def check_and_remove_nans(data: np.array, axis: int = 1) -> np.array:
 #     return x, y, -z
 #
 #
-# def ramachandran2(exp, points_of_interest, rotate=True, save_name=None, nan_threshold=50, low_threshold=0,
-#                   data_fraction=1, bins=300):
-#     dihedral_traj = check_and_remove_nans(exp.dihedral_traj)
-#     final_iteration = int(data_fraction * len(dihedral_traj))
-#     free_energy, xedges, yedges = free_energy_estimate_2D(dihedral_traj[:final_iteration], exp.beta, bins=bins,
-#                                                           weights=exp._slice(exp.metad_weights, final_iteration) / max(
-#                                                               exp.metad_weights))
-#     fig, ax = plt.subplots()
-#     if rotate is True:
-#         free_energy = free_energy.T
-#     if low_threshold is None:
-#         masked_free_energy = np.ma.array(free_energy, mask=(free_energy > nan_threshold))
-#     else:
-#         masked_free_energy = np.ma.array(free_energy, mask=(
-#             np.logical_or((free_energy > nan_threshold), (free_energy < low_threshold))))
-#     im = ax.pcolormesh(xedges, yedges, masked_free_energy)
-#     cbar = plt.colorbar(im)
-#     cbar.set_label(r'$\mathcal{F}(\phi,\psi)$ / kJmol$^{-1}$')
-#     plt.xticks(np.arange(-3, 4, 1))
-#     plt.xlabel(r'$\phi$')
-#     plt.ylabel(r'$\psi$')
-#     plt.gca().set_aspect('equal')
-#     for point in points_of_interest:
-#         plt.text(s=point[0], x=point[1] + 0.12, y=point[2] - 0.1)
-#         plt.scatter(point[1], point[2], c='k')
-#     plt.savefig(save_name, format="pdf", bbox_inches="tight")
-#
-#
 # def ramachandran_from_file(file, rotate=True):
 #     A = np.genfromtxt(file, delimiter=' ')
 #     A[A == np.inf] = 50
@@ -152,6 +124,7 @@ def check_and_remove_nans(data: np.array, axis: int = 1) -> np.array:
 
 def load_pdb(loc: str) -> md.Trajectory:
     pdb_files = glob.glob(os.path.join(loc, "*.pdb"))
+    # TODO: fix it to work with multiple pdb files w/ and w/o water
     assert (
         len(pdb_files) <= 1
     ), f"Read error: more than one PDB file found in the directory ({pdb_files})."
@@ -189,17 +162,25 @@ def load_dihedral_trajectory(loc: str, dihedral_pickle_file: str) -> list:
 
 
 def initialise_featurizer(
-    dihedral_features: list, topology
+    dihedral_features: Union[dict, str], topology
 ) -> pyemma.coordinates.featurizer:
-    # To check
     featurizer = pyemma.coordinates.featurizer(topology)
-    dihedral_indices = feat.create_torsions_list(
-        atoms=topology.n_atoms,
-        size=0,
-        append_to=dihedral_features,
-        print_list=False,
-    )
-    featurizer.add_dihedrals(dihedral_indices)  # cossin = True
+    # If features listed explicitly, add them
+    if isinstance(dihedral_features, dict):
+        dihedral_indices = feat.create_torsions_list(
+            atoms=topology.n_atoms,
+            size=0,
+            append_to=list(dihedral_features.values()),
+            print_list=False,
+        )
+        featurizer.add_dihedrals(dihedral_indices)  # cossin = True
+    elif dihedral_features == "dihedrals":
+        # Add all backbone dihedrals
+        featurizer.add_backbone_torsions()
+    else:
+        raise ValueError(
+            f"Invalid value for dihedral features: '{dihedral_features}'. "
+        )
     featurizer.describe()
     return featurizer
 
@@ -215,6 +196,21 @@ def slice_array(data: np.array, quantity: int) -> Union[np.array, None]:
         return None
     else:
         return data[:quantity]
+
+
+def get_feature_trajs_from_names(
+    feature_names: list[str],
+    featurized_traj: np.array,
+    featurizer: pyemma.coordinates.featurizer,
+) -> np.array:
+    all_features = featurizer.describe()
+
+    feature_trajs = []
+    for feature in feature_names:
+        feature_id = all_features.index(feature)
+        feature_trajs.append(featurized_traj[:, feature_id])
+
+    return np.array(feature_trajs)
 
 
 def assert_kwarg(kwargs: dict, kwarg: str, CV: str):
@@ -250,7 +246,7 @@ class Experiment:
     def __init__(
         self,
         location: str,
-        feature_dict: dict = None,
+        features: Optional[Union[dict, str]] = None,
         metad_bias_file=None,
     ):
         # ================== DEFAULTS =====================
@@ -306,7 +302,7 @@ class Experiment:
             self.feature_stds,
             self.num_features,
             self.features_provided,
-        ) = self.__init_features(feature_dict)
+        ) = self.__init_features(features)
 
         self.CVs = {"PCA": None, "TICA": None, "VAMP": None, "DM": None}
         self.kre = KramersRateEvaluator()
@@ -314,41 +310,83 @@ class Experiment:
 
     def free_energy_plot(
         self,
-        features: tuple[str],
+        features: list[str],
+        feature_nicknames: Optional[list[str]] = None,
+        nan_threshold: int = 50,
+        save_name="free_energy_plot",
+        plot_type="contour",  # either "scatter" or "contour"
         data_fraction: float = 1.0,
         bins: int = 100,
-        nan_threshold: int = 50,
-        save_name="free_energy_plot.pdf",
-    ):
-        if not self.features_provided:
+    ) -> None:
+        if self.features_provided:
+            for feature in features:
+                assert (
+                    feature in self.featurizer.describe()
+                ), f"Feature '{feature}' not found in available features ({self.featurizer.describe()})"
+            if not feature_nicknames:
+                feature_nicknames = features
+            fig, ax = init_plot(
+                "Free Energy Surface",
+                f"${feature_nicknames[0]}$",
+                f"${feature_nicknames[1]}$",
+            )
+            if plot_type == "scatter":
+                # TODO: add warning if trying to do scatter plot with bias adjustments
+                ax, im = self._scatter_fes(
+                    ax, features, data_fraction, bins, nan_threshold
+                )
+            elif plot_type == "contour":
+                pass
+            else:
+                raise ValueError(
+                    f"Invalid plot_type parameter '{plot_type}', must be either 'scatter' or 'contour'"
+                )
+            cbar = plt.colorbar(im)
+            cbar.set_label(
+                f"$F({feature_nicknames[0]},{feature_nicknames[1]})$ / kJ mol$^{{-1}}$"
+            )
+            plt.gca().set_aspect("equal")
+            save_fig(fig, save_dir=os.getcwd(), name=save_name)
+        else:
             raise ValueError(
                 "Cannot construct ramachandran plot for an unfeaturized trajectory. "
                 "Try reinitializing Experiment object with features defined."
             )
-        else:
-            assert (
-                len(features) == 2
-            ), "Only two features can be used for a free energy plot."
-            fig, ax = init_plot(
-                "Free Energy Surface", f"${features[0]}$", f"${features[1]}$"
-            )
-            free_energy, xedges, yedges = free_energy_estimate_2D(
-                ax,
-                self.featurized_traj[: int(data_fraction * self.num_frames)],
-                features,
-                self.feature_dict,
-                self.beta,
-                bins=bins,
-            )
-            masked_free_energy = np.ma.array(
-                free_energy, mask=(free_energy > nan_threshold)
-            )
-            im = ax.pcolormesh(xedges, yedges, masked_free_energy)
-            cbar = plt.colorbar(im)
-            cbar.set_label(f"$F({features[0]},{features[1]})$ / kJ mol$^{{-1}}$")
-            plt.gca().set_aspect("equal")
 
-            return None
+        return None
+
+    def _scatter_fes(self, ax, feature_names: list[str], data_fraction: float, bins: int, nan_threshold: int):
+        free_energy, xedges, yedges = free_energy_estimate_2D(
+            ax,
+            get_feature_trajs_from_names(
+                feature_names, self.featurized_traj, self.featurizer
+            )[: int(data_fraction * self.num_frames)],  # get traj of features and trim to data fraction
+            self.beta,
+            bins=bins,
+        )
+        masked_free_energy = np.ma.array(
+            free_energy, mask=(free_energy > nan_threshold)
+        )
+        im = ax.pcolormesh(xedges, yedges, masked_free_energy)
+
+        return ax, im
+
+    def _contour_fes(self, fig, ax, feature_names: list[str], feature_nicknames):
+        pass
+        # xyz = check_and_remove_nans(
+        #     np.hstack([self.dihedral_traj, np.array([exp.bias_potential_traj]).T])
+        # )
+        # x = xyz[:, 0]
+        # y = xyz[:, 1]
+        # z = xyz[:, 2]
+        # fe = -z + np.max(z)
+        #     print(np.min(fe), np.max(fe))
+        #     # set level increment every unit of kT
+        #     num_levels = int(np.floor((np.max(fe) - np.min(fe)) / 2.5))
+        #     levels = [k * 2.5 for k in range(num_levels + 2)]
+        #     ramachandran_from_x_y_z(x, y, fe, rotate, levels)
+        #     cntr2 = ax.tricontourf(x, y, z, levels=levels, cmap="RdBu_r")
+        #     ax.tricontour(x, y, z, levels=levels, linewidths=0.5, colors='k')
 
     def implied_timescale_analysis(self, max_lag: int = 10, k: int = 10):
         if self.discrete_traj is None:
@@ -527,18 +565,22 @@ class Experiment:
 
         return metad_weights, bias_potential_traj
 
-    def __init_features(self, features: Union[dict, None]):
+    def __init_features(self, features: Optional[Union[dict, str]]):
         """
-        Featurises the trajectory according to specified features
+        Featurises the trajectory according to specified features.
+        Features can be an explicit dictionary of dihedrals, such as {'\phi' : [4, 6, 8 ,14], '\psi' : [6, 8, 14, 16]}.
+        Alternatively, you can specify the automatic inclusion of *all* backbone dihedrals by setting
+        features = "dihedrals".
         """
+        # TODO: check feature names are preserved correctly when adding through dictionary
         if features:
-            featurizer = initialise_featurizer(list(features.values()), self.topology)
+            featurizer = initialise_featurizer(features, self.topology)
             featurized_traj = featurizer.transform(self.traj)
             feature_means = np.mean(featurized_traj, axis=0)
             feature_stds = np.std(featurized_traj, axis=0)
-            num_features = len(features)
+            num_features = len(featurizer.describe())
             features_provided = True
-            print("Successfully featurized trajectory.")
+            print(f"Successfully featurized trajectory with {num_features} features.")
         else:
             featurizer, featurized_traj, feature_means, feature_stds, num_features = (
                 None,

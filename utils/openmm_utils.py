@@ -89,6 +89,7 @@ def parse_quantity(s: str):
     except Exception:
         raise ValueError(f"Invalid quantity: {s}")
 
+# TODO: duration and total steps correct in metadata when resuming
 
 class OpenMMSimulation:
     def __init__(self):
@@ -115,7 +116,7 @@ class OpenMMSimulation:
         )
         parser.add_argument(
             "pdb",
-            help="(file) PDB file describing topology and positions. Should be solvated and equilibrated",
+            help="(file) PDB file describing topology and positions.",
         )
         parser.add_argument("ff", help=f"Forcefield/Potential to use: {self.valid_ffs}")
         parser.add_argument("pr", help=f"Precision to use: {self.valid_precision}")
@@ -283,7 +284,7 @@ class OpenMMSimulation:
         self.output_dir = output_dir
         return self.output_dir
 
-    # TODO: updating metadata
+    # TODO: updating metadata correctly when resuming previous simulation run
     def save_simulation_metadata(self):
         args_as_dict = stringify_named_tuple(self.systemargs)
         print(args_as_dict)
@@ -313,14 +314,22 @@ class OpenMMSimulation:
 
     def initialise_modeller(self, pdb) -> app.Modeller:
         modeller = app.Modeller(pdb.topology, pdb.positions)
-        if not self.systemargs.watermodel:
-            modeller.deleteWater()
+        if self.systemargs.resume:
+            # Do not make any modifications to the modeller
+            pass
         else:
-            modeller.addSolvent(
-                self.force_field,
-                model=self.systemargs.watermodel,
-                padding=1 * unit.nanometer,
-            )
+            # Remove pre-existing water
+            modeller.deleteWater()
+            if self.systemargs.watermodel:
+                # Re-introduce water to the modeller
+                modeller.addSolvent(
+                    self.force_field,
+                    model=self.systemargs.watermodel,
+                    padding=1 * unit.nanometer,
+                )
+            else:
+                # Do not add water to the modeller
+                pass
 
         return modeller
 

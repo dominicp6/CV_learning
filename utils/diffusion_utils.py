@@ -125,8 +125,11 @@ def cluster_time_series(
     return cluster
 
 
-def compute_well_integrand(free_energy: npt.NDArray[np.float64], beta: float) -> npt.NDArray[np.float64]:
+def compute_well_integrand(
+    free_energy: npt.NDArray[np.float64], beta: float
+) -> npt.NDArray[np.float64]:
     return np.exp(-beta * free_energy)
+
 
 # TODO: efficiency improvements?
 def compute_barrier_integrand(
@@ -134,17 +137,19 @@ def compute_barrier_integrand(
     diff_const_values: npt.NDArray[np.float64],
     coordinates: npt.NDArray[np.float64],
     free_energy: npt.NDArray[np.float64],
-    beta: float
+    beta: float,
 ) -> npt.NDArray[np.float64]:
-    return np.array([
-        np.exp(beta * free_energy[x])
-        / gutl.linear_interp_coordinate_data(
-            diff_const_domain,
-            diff_const_values,
-            coordinates[x],
-        )
-        for x in range(len(free_energy))
-    ])
+    return np.array(
+        [
+            np.exp(beta * free_energy[x])
+            / gutl.linear_interp_coordinate_data(
+                diff_const_domain,
+                diff_const_values,
+                coordinates[x],
+            )
+            for x in range(len(free_energy))
+        ]
+    )
 
 
 def compute_well_integrand_from_potential(
@@ -154,9 +159,14 @@ def compute_well_integrand_from_potential(
 
 
 def compute_barrier_integrand_from_potential(
-    potential: Callable, beta: float, diffusion_function: Callable, x_range: npt.NDArray[np.float64]
+    potential: Callable,
+    beta: float,
+    diffusion_function: Callable,
+    x_range: npt.NDArray[np.float64],
 ) -> npt.NDArray[np.float64]:
-    return np.array([np.exp(beta * potential(x)) / diffusion_function(x) for x in x_range])
+    return np.array(
+        [np.exp(beta * potential(x)) / diffusion_function(x) for x in x_range]
+    )
 
 
 def compute_well_and_barrier_integrals(
@@ -169,11 +179,11 @@ def compute_well_and_barrier_integrals(
 ) -> (np.array, np.array):
     if final_x > initial_x:
         well_integral = integrate.simpson(
-            well_integrand[initial_x: mid_x + 1], x_coords[initial_x: mid_x + 1]
+            well_integrand[initial_x : mid_x + 1], x_coords[initial_x : mid_x + 1]
         )
         barrier_integral = integrate.simpson(
             barrier_integrand[initial_x + 1 : final_x],
-            x_coords[initial_x + 1: final_x],
+            x_coords[initial_x + 1 : final_x],
         )
     else:
         well_integral = integrate.simpson(
@@ -264,21 +274,21 @@ def free_energy_estimate(
     return free_energy, robust_coordinates
 
 
-def free_energy_estimate_2D(ax: object, samples: np.array, features: tuple[str], feature_dict: dict, beta: float,
-                            bins: int = 300):
+def free_energy_estimate_2D(
+    ax: object,
+    data: np.array,
+    beta: float,
+    bins: int = 300,
+):
+    assert (
+            data.shape[0] == 2
+    ), f"Exactly two features must be provided for a 2D free energy surface plot (but {data.shape[0]} were provided)."
 
-    # TODO: some robustness improvements for edge cases where there are degenerate feature names
-    plot_data = []
-    for feature in features:
-        for idx, feat_name in enumerate(feature_dict.keys()):
-            if feat_name == feature:
-                plot_data.append(samples[:, idx])
-
-    h, xedges, yedges, quadmesh = ax.hist2d(plot_data[0], plot_data[1], bins=bins)
+    h, xedges, yedges, quadmesh = ax.hist2d(data[0], data[1], bins=bins)
     total_counts = np.sum(h)
     with np.errstate(divide="ignore"):
-        # TODO: fix
-        free_energy = -(1 / beta) * np.log(h / total_counts + 0.000000000001)
+        machine_epsilon = np.finfo(float).eps
+        free_energy = -(1 / beta) * np.log(h / total_counts + machine_epsilon)
         free_energy = np.nan_to_num(free_energy, nan=0)
 
     return free_energy - np.min(free_energy), xedges, yedges
