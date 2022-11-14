@@ -4,6 +4,7 @@ import sys
 from collections import namedtuple
 from datetime import datetime
 import json
+import copy
 
 import openmm
 import openmm.app as app
@@ -14,12 +15,13 @@ import matplotlib.ticker as tkr
 import seaborn as sns
 from pdbfixer import PDBFixer
 
-SystemArgs = namedtuple("System_Args",
-                        "pdb forcefield resume duration savefreq stepsize temperature pressure "
-                        "frictioncoeff total_steps steps_per_save nonperiodic gpu minimise precision watermodel")
+SystemArgs = namedtuple(
+    "System_Args",
+    "pdb forcefield resume duration savefreq stepsize temperature pressure "
+    "frictioncoeff total_steps steps_per_save nonperiodic gpu minimise precision watermodel",
+)
 
-SystemObjs = namedtuple("System_Objs",
-                        "pdb modeller peptide_indices system")
+SystemObjs = namedtuple("System_Objs", "pdb modeller peptide_indices system")
 
 SimulationProps = namedtuple("Simulation_Props", "integrator simulation properties")
 
@@ -31,16 +33,14 @@ unit_labels = {
     "ps": unit.picoseconds,
     "fs": unit.femtoseconds,
     "bar": unit.bar,
-    "K": unit.kelvin
+    "K": unit.kelvin,
 }
 
-# TODO: make it so that metadata is produced in valid formatting (without spaces)
-# TODO: automatically produce no water topology file
 
 def stringify_named_tuple(obj: namedtuple):
     dict_of_obj = {}
     for key, value in obj._asdict().items():
-        dict_of_obj[key] = str(value)
+        dict_of_obj[key] = str(value).replace(" ", "")
 
     return dict_of_obj
 
@@ -76,27 +76,21 @@ def fix_pdb(path_to_file):
     app.pdbfile.PDBFile.writeFile(
         fixer.topology,
         fixer.positions,
-        open(f"{path_to_file[:-4]}_fixed.pdb",
-             "w"),
-        keepIds=True)
+        open(f"{path_to_file[:-4]}_fixed.pdb", "w"),
+        keepIds=True,
+    )
 
-
-# TODO: option to save topology file with no water for convenience
 
 def parse_quantity(s: str):
     try:
-        u = s.lstrip('0123456789.')
-        v = s[:-len(u)]
-        return unit.Quantity(
-            float(v),
-            unit_labels[u]
-        )
+        u = s.lstrip("0123456789.")
+        v = s[: -len(u)]
+        return unit.Quantity(float(v), unit_labels[u])
     except Exception:
         raise ValueError(f"Invalid quantity: {s}")
 
 
 class OpenMMSimulation:
-
     def __init__(self):
         # CONSTANTS
         self.CHECKPOINT_FN = "checkpoint.chk"
@@ -104,9 +98,9 @@ class OpenMMSimulation:
         self.STATE_DATA_FN = "state_data.csv"
         self.METADATA_FN = "metadata.json"
 
-        self.valid_ffs = ['ani2x', 'ani1ccx', 'amber', "ani2x_mixed", "ani1ccx_mixed"]
-        self.valid_precision = ['single', 'mixed', 'double']
-        self.valid_wms = ['tip3p', 'tip3pfb', 'spce', 'tip4pew', 'tip4pfb', 'tip5p']
+        self.valid_ffs = ["ani2x", "ani1ccx", "amber", "ani2x_mixed", "ani1ccx_mixed"]
+        self.valid_precision = ["single", "mixed", "double"]
+        self.valid_wms = ["tip3p", "tip3pfb", "spce", "tip4pew", "tip4pfb", "tip5p"]
 
         # PROPERTIES
         self.systemargs = None
@@ -116,29 +110,71 @@ class OpenMMSimulation:
         self.force_field = None
 
     def parse_args(self):
-        parser = argparse.ArgumentParser(description='Production run for an equilibrated biomolecule.')
-        parser.add_argument("pdb",
-                            help="(file) PDB file describing topology and positions. Should be solvated and equilibrated")
+        parser = argparse.ArgumentParser(
+            description="Production run for an equilibrated biomolecule."
+        )
+        parser.add_argument(
+            "pdb",
+            help="(file) PDB file describing topology and positions. Should be solvated and equilibrated",
+        )
         parser.add_argument("ff", help=f"Forcefield/Potential to use: {self.valid_ffs}")
         parser.add_argument("pr", help=f"Precision to use: {self.valid_precision}")
-        parser.add_argument("-r", "--resume", help="(dir) Resume simulation from an existing production directory")
+        parser.add_argument(
+            "-r",
+            "--resume",
+            help="(dir) Resume simulation from an existing production directory",
+        )
         # The CUDA Platform supports parallelizing a simulation across multiple GPUs. \
         # To do that, set this to a comma separated list of values. For example, -g 0,1.
-        parser.add_argument("-g", "--gpu", default="",
-                            help="(int) Choose CUDA device(s) to target [note - ANI must run on GPU 0]")
-        parser.add_argument("-d", "--duration", default="1ns", help="Duration of simulation")
-        parser.add_argument("-f", "--savefreq", default="1ps", help="Interval for all reporters to save data")
-        parser.add_argument("-s", "--stepsize", default="2fs", help="Integrator step size")
-        parser.add_argument("-t", "--temperature", default="300K", help="Temperature for Langevin dynamics")
-        parser.add_argument("-p", "--pressure", default="1bar", help="Pressure for MonteCarloBarostat")
-        parser.add_argument("-c", "--frictioncoeff", default="1ps",
-                            help="Integrator friction coeff [your value]^-1 ie for 0.1fs^-1 put in 0.1fs. "
-                                 "The unit but not the value will be converted to its reciprocal.")
-        parser.add_argument("-np", "--nonperiodic", action=argparse.BooleanOptionalAction,
-                            help="Prevent periodic boundary conditions from being applied")
-        parser.add_argument("-m", "--minimise", action=argparse.BooleanOptionalAction,
-                            help="Minimises energy before running the simulation (recommended)")
-        parser.add_argument("-w", "--water", default="", help=f"(str) The water model: {self.valid_wms}")
+        parser.add_argument(
+            "-g",
+            "--gpu",
+            default="",
+            help="(int) Choose CUDA device(s) to target [note - ANI must run on GPU 0]",
+        )
+        parser.add_argument(
+            "-d", "--duration", default="1ns", help="Duration of simulation"
+        )
+        parser.add_argument(
+            "-f",
+            "--savefreq",
+            default="1ps",
+            help="Interval for all reporters to save data",
+        )
+        parser.add_argument(
+            "-s", "--stepsize", default="2fs", help="Integrator step size"
+        )
+        parser.add_argument(
+            "-t",
+            "--temperature",
+            default="300K",
+            help="Temperature for Langevin dynamics",
+        )
+        parser.add_argument(
+            "-p", "--pressure", default="1bar", help="Pressure for MonteCarloBarostat"
+        )
+        parser.add_argument(
+            "-c",
+            "--frictioncoeff",
+            default="1ps",
+            help="Integrator friction coeff [your value]^-1 ie for 0.1fs^-1 put in 0.1fs. "
+            "The unit but not the value will be converted to its reciprocal.",
+        )
+        parser.add_argument(
+            "-np",
+            "--nonperiodic",
+            action=argparse.BooleanOptionalAction,
+            help="Prevent periodic boundary conditions from being applied",
+        )
+        parser.add_argument(
+            "-m",
+            "--minimise",
+            action=argparse.BooleanOptionalAction,
+            help="Minimises energy before running the simulation (recommended)",
+        )
+        parser.add_argument(
+            "-w", "--water", default="", help=f"(str) The water model: {self.valid_wms}"
+        )
         args = parser.parse_args()
         pdb = args.pdb
         forcefield = args.ff.lower()
@@ -158,22 +194,45 @@ class OpenMMSimulation:
         minimise = args.minimise
         watermodel = args.water
 
-        self.systemargs = SystemArgs(pdb, forcefield, resume, duration, savefreq, stepsize, temperature, pressure,
-                                     frictioncoeff, total_steps, steps_per_save, nonperiodic, gpu, minimise,
-                                     precision, watermodel)
+        self.systemargs = SystemArgs(
+            pdb,
+            forcefield,
+            resume,
+            duration,
+            savefreq,
+            stepsize,
+            temperature,
+            pressure,
+            frictioncoeff,
+            total_steps,
+            steps_per_save,
+            nonperiodic,
+            gpu,
+            minimise,
+            precision,
+            watermodel,
+        )
 
         return self.systemargs
 
     def check_args(self):
         if self.systemargs.forcefield not in self.valid_ffs:
-            print(f"Invalid forcefield: {self.systemargs.forcefield}, must be {self.valid_ffs}")
+            print(
+                f"Invalid forcefield: {self.systemargs.forcefield}, must be {self.valid_ffs}"
+            )
             quit()
 
         if self.systemargs.watermodel not in self.valid_wms and not "":
-            print(f"Invalid water model: {self.systemargs.watermodel}, must be {self.valid_wms}")
+            print(
+                f"Invalid water model: {self.systemargs.watermodel}, must be {self.valid_wms}"
+            )
 
-        if self.systemargs.resume is not None and not os.path.isdir(self.systemargs.resume):
-            print(f"Production directory to resume is not a directory: {self.systemargs.resume}")
+        if self.systemargs.resume is not None and not os.path.isdir(
+            self.systemargs.resume
+        ):
+            print(
+                f"Production directory to resume is not a directory: {self.systemargs.resume}"
+            )
             quit()
 
         if self.systemargs.resume:
@@ -181,11 +240,13 @@ class OpenMMSimulation:
             resume_requires = (
                 self.CHECKPOINT_FN,
                 self.TRAJECTORY_FN,
-                self.STATE_DATA_FN
+                self.STATE_DATA_FN,
             )
 
             if not all(filename in resume_contains for filename in resume_requires):
-                print(f"Production directory to resume must contain files with the following names: {resume_requires}")
+                print(
+                    f"Production directory to resume must contain files with the following names: {resume_requires}"
+                )
                 quit()
 
     def setup_system(self):
@@ -226,37 +287,40 @@ class OpenMMSimulation:
     def save_simulation_metadata(self):
         args_as_dict = stringify_named_tuple(self.systemargs)
         print(args_as_dict)
-        with open(os.path.join(self.output_dir, self.METADATA_FN), 'w') as json_file:
+        with open(os.path.join(self.output_dir, self.METADATA_FN), "w") as json_file:
             json.dump(args_as_dict, json_file)
 
     def initialise_pdb(self) -> app.PDBFile:
         pdb = app.PDBFile(self.systemargs.pdb)
         if self.systemargs.nonperiodic:
-            print('Setting non-periodic boundary conditions')
+            print("Setting non-periodic boundary conditions")
             pdb.topology.setPeriodicBoxVectors(None)
 
         return pdb
 
     def get_peptide_indices(self, pdb) -> list[int]:
-        return [atom.index for atom in pdb.topology.atoms() if atom.residue.name != "HOH"]
+        return [
+            atom.index for atom in pdb.topology.atoms() if atom.residue.name != "HOH"
+        ]
 
     def initialise_forcefield(self) -> app.ForceField:
         if self.systemargs.forcefield == "amber":  # Create AMBER system
-            self.force_field = app.ForceField('amber14-all.xml', 'amber14/tip3p.xml')
+            self.force_field = app.ForceField("amber14-all.xml", "amber14/tip3p.xml")
         else:
-            raise ValueError(f'Force field {self.systemargs.forcefield} not supported.')
+            raise ValueError(f"Force field {self.systemargs.forcefield} not supported.")
 
         return self.force_field
 
     def initialise_modeller(self, pdb) -> app.Modeller:
-        modeller = app.Modeller(
-            pdb.topology,
-            pdb.positions
-        )
+        modeller = app.Modeller(pdb.topology, pdb.positions)
         if not self.systemargs.watermodel:
             modeller.deleteWater()
         else:
-            modeller.addSolvent(self.force_field, model=self.systemargs.watermodel, padding=1 * unit.nanometer)
+            modeller.addSolvent(
+                self.force_field,
+                model=self.systemargs.watermodel,
+                padding=1 * unit.nanometer,
+            )
 
         return modeller
 
@@ -266,8 +330,19 @@ class OpenMMSimulation:
         pdb.writeFile(
             modeller.getTopology(),
             modeller.getPositions(),
-            open(os.path.join(self.output_dir, "topology.pdb"), "w")
+            open(os.path.join(self.output_dir, "topology.pdb"), "w"),
         )
+        # If there are water molecules in the topology file, then save an additional topology
+        # file excluding those water molecules
+        if self.systemargs.watermodel != "":
+            modeller_copy = copy.deepcopy(modeller)
+            modeller_copy.deleteWater()
+            pdb.writeFile(
+                modeller.getTopology(),
+                modeller.getPositions(),
+                open(os.path.join(self.output_dir, "topology_nw.pdb"), "w"),
+            )
+            del modeller_copy
 
     def create_system(self, pdb: app.PDBFile):
         """
@@ -293,16 +368,27 @@ class OpenMMSimulation:
             print("Running energy minimisation...")
             # initial system energy
             print("\ninitial system energy")
-            print(self.simulationprops.simulation.context.getState(getEnergy=True).getPotentialEnergy())
+            print(
+                self.simulationprops.simulation.context.getState(
+                    getEnergy=True
+                ).getPotentialEnergy()
+            )
             self.simulationprops.simulation.minimizeEnergy()
             print("\nafter minimization")
-            print(self.simulationprops.simulation.context.getState(getEnergy=True).getPotentialEnergy())
+            print(
+                self.simulationprops.simulation.context.getState(
+                    getEnergy=True
+                ).getPotentialEnergy()
+            )
             print("[x] Finished minimisation")
         self.setup_reporters()
         print("Successfully setup simulation")
 
     def initialise_simulation(self):
-        properties = {'CudaDeviceIndex': self.systemargs.gpu, 'Precision': self.systemargs.precision}
+        properties = {
+            "CudaDeviceIndex": self.systemargs.gpu,
+            "Precision": self.systemargs.precision,
+        }
 
         # TODO: add barostat
         # self.systemobjs.system.addForce(openmm.MonteCarloBarostat(self.systemargs.pressure, self.systemargs.temperature))
@@ -311,7 +397,7 @@ class OpenMMSimulation:
         integrator = openmm.LangevinMiddleIntegrator(
             self.systemargs.temperature,
             self.systemargs.frictioncoeff,
-            self.systemargs.stepsize
+            self.systemargs.stepsize,
         )
         # Create simulation and set initial positions
         simulation = app.Simulation(
@@ -319,7 +405,7 @@ class OpenMMSimulation:
             self.systemobjs.system,
             integrator,
             openmm.Platform.getPlatformByName("CUDA"),
-            properties
+            properties,
         )
 
         # Specify the initial positions to be the positions that were loaded from the PDB file
@@ -334,39 +420,48 @@ class OpenMMSimulation:
 
     def setup_reporters(self):
         # Reporter to print info to stdout
-        self.simulationprops.simulation.reporters.append(app.StateDataReporter(
-            sys.stdout,
-            self.systemargs.steps_per_save,
-            progress=True,  # Info to print. Add anything you want here.
-            remainingTime=True,
-            speed=True,
-            totalSteps=self.systemargs.total_steps,
-        ))
+        self.simulationprops.simulation.reporters.append(
+            app.StateDataReporter(
+                sys.stdout,
+                self.systemargs.steps_per_save,
+                progress=True,  # Info to print. Add anything you want here.
+                remainingTime=True,
+                speed=True,
+                totalSteps=self.systemargs.total_steps,
+            )
+        )
         # Reporter to log lots of info to csv
-        self.simulationprops.simulation.reporters.append(app.StateDataReporter(
-            os.path.join(self.output_dir, self.STATE_DATA_FN),
-            self.systemargs.steps_per_save,
-            step=True,
-            time=True,
-            speed=True,
-            temperature=True,
-            potentialEnergy=True,
-            kineticEnergy=True,
-            totalEnergy=True,
-            append=True if self.systemargs.resume else False
-        ))
+        self.simulationprops.simulation.reporters.append(
+            app.StateDataReporter(
+                os.path.join(self.output_dir, self.STATE_DATA_FN),
+                self.systemargs.steps_per_save,
+                step=True,
+                time=True,
+                speed=True,
+                temperature=True,
+                potentialEnergy=True,
+                kineticEnergy=True,
+                totalEnergy=True,
+                append=True if self.systemargs.resume else False,
+            )
+        )
         # Reporter to save trajectory
         # Save only a subset of atoms to the trajectory, ignore water
-        self.simulationprops.simulation.reporters.append(app.DCDReporter(
-            os.path.join(self.output_dir, self.TRAJECTORY_FN),
-            reportInterval=self.systemargs.steps_per_save,
-            append=True if self.systemargs.resume else False))
+        self.simulationprops.simulation.reporters.append(
+            app.DCDReporter(
+                os.path.join(self.output_dir, self.TRAJECTORY_FN),
+                reportInterval=self.systemargs.steps_per_save,
+                append=True if self.systemargs.resume else False,
+            )
+        )
 
         # Reporter to save regular checkpoints
-        self.simulationprops.simulation.reporters.append(app.CheckpointReporter(
-            os.path.join(self.output_dir, self.CHECKPOINT_FN),
-            self.systemargs.steps_per_save
-        ))
+        self.simulationprops.simulation.reporters.append(
+            app.CheckpointReporter(
+                os.path.join(self.output_dir, self.CHECKPOINT_FN),
+                self.systemargs.steps_per_save,
+            )
+        )
 
     def run_simulation(self):
         print("Running production...")
@@ -375,23 +470,32 @@ class OpenMMSimulation:
 
     def save_checkpoint(self):
         # Save final checkpoint and state
-        self.simulationprops.simulation.saveCheckpoint(os.path.join(self.output_dir, self.CHECKPOINT_FN))
-        self.simulationprops.simulation.saveState(os.path.join(self.output_dir, 'end_state.xml'))
+        self.simulationprops.simulation.saveCheckpoint(
+            os.path.join(self.output_dir, self.CHECKPOINT_FN)
+        )
+        self.simulationprops.simulation.saveState(
+            os.path.join(self.output_dir, "end_state.xml")
+        )
 
     def make_graphs(self):
         # Make some graphs
         report = pd.read_csv(os.path.join(self.output_dir, self.STATE_DATA_FN))
         report = report.melt()
 
-        with sns.plotting_context('paper'):
-            g = sns.FacetGrid(data=report, row='variable', sharey=False)
-            g.map(plt.plot, 'value')
+        with sns.plotting_context("paper"):
+            g = sns.FacetGrid(data=report, row="variable", sharey=False)
+            g.map(plt.plot, "value")
             # format the labels with f-strings
             for ax in g.axes.flat:
                 ax.xaxis.set_major_formatter(
                     tkr.FuncFormatter(
-                        lambda x, p: f'{(x * self.systemargs.stepsize).value_in_unit(unit.nanoseconds):.1f}ns'))
-            plt.savefig(os.path.join(self.output_dir, 'graphs.png'), bbox_inches='tight')
+                        lambda x, p: f"{(x * self.systemargs.stepsize).value_in_unit(unit.nanoseconds):.1f}ns"
+                    )
+                )
+            plt.savefig(
+                os.path.join(self.output_dir, "graphs.png"), bbox_inches="tight"
+            )
+
 
 # Next Steps
 # print a trajectory of the aaa dihedrals, counting the flips
