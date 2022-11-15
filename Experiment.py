@@ -34,46 +34,9 @@ from utils.plotting_functions import init_plot, save_fig
 
 # TODO: think what is happening to water molecules in the trajectory
 #
-# def free_energy_estimate(samples, beta, minimum_counts=50, bins=200):
-#     # histogram
-#     counts, coordinate = np.histogram(samples, bins=bins)
-#     robust_counts = counts[np.where(counts > minimum_counts)]
-#     robust_coordinates = coordinate[np.where(counts > minimum_counts)]
-#
-#     # log normal
-#     normalised_counts = robust_counts / np.sum(counts)
-#     with np.errstate(divide='ignore'):
-#         free_energy = - (1 / beta) * np.log(normalised_counts)
-#
-#     return free_energy, robust_coordinates
-#
-# def parse_quantity(s):
-#     try:
-#         u = s.lstrip('0123456789.')
-#         v = s[:-len(u)]
-#         return unit.Quantity(
-#             float(v),
-#             unit_labels[u]
-#         )
-#     except Exception:
-#         raise ValueError(f"Invalid quantity: {s}")
-#
-#
 # def subsample_trajectory(trajectory, stride):
 #     traj = md.Trajectory(trajectory.xyz[::stride], trajectory.topology)
 #     return traj.superpose(traj[0])
-#
-#
-def check_and_remove_nans(data: np.array, axis: int = 1) -> np.array:
-    num_nans = np.count_nonzero(np.isnan(data))
-    if num_nans > 0:
-        axis_str = "rows" if axis == 1 else "columns"
-        print(f"{num_nans} NaNs detected, removing {axis_str} with NaNs.")
-        data = data[~np.isnan(data).any(axis=1), :]
-
-    return data
-
-
 #
 #
 # def ramachandran_from_x_y_z(x, y, z, rotate, levels=None):
@@ -93,33 +56,16 @@ def check_and_remove_nans(data: np.array, axis: int = 1) -> np.array:
 #     plt.xticks(np.arange(-3, 4, 1))
 #     plt.subplots_adjust(hspace=0.5)
 #
-#
-# def ramachandran(exp, points_of_interest, rotate=True, save_name=None):
-#     xyz = check_and_remove_nans(np.hstack([exp.dihedral_traj, np.array([exp.bias_potential_traj]).T]))
-#     x = xyz[:, 0]
-#     y = xyz[:, 1]
-#     z = xyz[:, 2]
-#     fe = -z + np.max(z)
-#     print(np.min(fe), np.max(fe))
-#     # set level increment every unit of kT
-#     num_levels = int(np.floor((np.max(fe) - np.min(fe)) / 2.5))
-#     levels = [k * 2.5 for k in range(num_levels + 2)]
-#     ramachandran_from_x_y_z(x, y, fe, rotate, levels)
-#     for point in points_of_interest:
-#         plt.text(s=point[0], x=point[1] + 0.12, y=point[2] - 0.1)
-#         plt.scatter(point[1], point[2], c='k')
-#     # plt.savefig(save_name, format="pdf", bbox_inches="tight")
-#     return x, y, -z
-#
-#
-# def ramachandran_from_file(file, rotate=True):
-#     A = np.genfromtxt(file, delimiter=' ')
-#     A[A == np.inf] = 50
-#     num_levels = int(np.floor((np.max(A[:,2])-np.min(A[:,2])) / 2.5))
-#     levels = [k * 2.5 for k in range(num_levels+2)]
-#     ramachandran_from_x_y_z(A[:,0],A[:,1],A[:,2]-np.min(A[:,2]),rotate=rotate,levels=levels)
-#     print(A.shape)
-#     print(A)
+
+
+def remove_nans(data: np.array, axis: int = 1) -> np.array:
+    num_nans = np.count_nonzero(np.isnan(data))
+    if num_nans > 0:
+        axis_str = "rows" if axis == 1 else "columns"
+        print(f"{num_nans} NaNs detected, removing {axis_str} with NaNs.")
+        data = data[~np.isnan(data).any(axis=1), :]
+
+    return data
 
 
 def load_pdb(loc: str) -> md.Trajectory:
@@ -314,79 +260,33 @@ class Experiment:
         feature_nicknames: Optional[list[str]] = None,
         nan_threshold: int = 50,
         save_name="free_energy_plot",
-        plot_type="contour",  # either "scatter" or "contour"
         data_fraction: float = 1.0,
         bins: int = 100,
     ) -> None:
-        if self.features_provided:
-            for feature in features:
-                assert (
-                    feature in self.featurizer.describe()
-                ), f"Feature '{feature}' not found in available features ({self.featurizer.describe()})"
-            if not feature_nicknames:
-                feature_nicknames = features
-            fig, ax = init_plot(
-                "Free Energy Surface",
-                f"${feature_nicknames[0]}$",
-                f"${feature_nicknames[1]}$",
-            )
-            if plot_type == "scatter":
-                # TODO: add warning if trying to do scatter plot with bias adjustments
-                ax, im = self._scatter_fes(
-                    ax, features, data_fraction, bins, nan_threshold
-                )
-            elif plot_type == "contour":
-                pass
-            else:
-                raise ValueError(
-                    f"Invalid plot_type parameter '{plot_type}', must be either 'scatter' or 'contour'"
-                )
-            cbar = plt.colorbar(im)
-            cbar.set_label(
-                f"$F({feature_nicknames[0]},{feature_nicknames[1]})$ / kJ mol$^{{-1}}$"
-            )
-            plt.gca().set_aspect("equal")
-            save_fig(fig, save_dir=os.getcwd(), name=save_name)
+        feature_nicknames = self._check_fes_arguments(features, feature_nicknames)
+        fig, ax = init_plot(
+            "Free Energy Surface",
+            f"${feature_nicknames[0]}$",
+            f"${feature_nicknames[1]}$",
+        )
+        # get traj of features and trim to data fraction
+        feature_traj = get_feature_trajs_from_names(
+            features, self.featurized_traj, self.featurizer
+        )[: int(data_fraction * self.num_frames)]
+        if self.bias_potential_traj:
+            # biased experiments require contour plots
+            ax, im = self._contour_fes(ax, feature_traj)
         else:
-            raise ValueError(
-                "Cannot construct ramachandran plot for an unfeaturized trajectory. "
-                "Try reinitializing Experiment object with features defined."
-            )
-
-        return None
-
-    def _scatter_fes(self, ax, feature_names: list[str], data_fraction: float, bins: int, nan_threshold: int):
-        free_energy, xedges, yedges = free_energy_estimate_2D(
-            ax,
-            get_feature_trajs_from_names(
-                feature_names, self.featurized_traj, self.featurizer
-            )[: int(data_fraction * self.num_frames)],  # get traj of features and trim to data fraction
-            self.beta,
-            bins=bins,
+            # unbiased experiments require scatter plots
+            ax, im = self._scatter_fes(ax, feature_traj, bins, nan_threshold)
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label(
+            f"$F({feature_nicknames[0]},{feature_nicknames[1]})$ / kJ mol$^{{-1}}$"
         )
-        masked_free_energy = np.ma.array(
-            free_energy, mask=(free_energy > nan_threshold)
-        )
-        im = ax.pcolormesh(xedges, yedges, masked_free_energy)
+        plt.gca().set_aspect("equal")
+        save_fig(fig, save_dir=os.getcwd(), name=save_name)
 
-        return ax, im
-
-    def _contour_fes(self, fig, ax, feature_names: list[str], feature_nicknames):
-        pass
-        # xyz = check_and_remove_nans(
-        #     np.hstack([self.dihedral_traj, np.array([exp.bias_potential_traj]).T])
-        # )
-        # x = xyz[:, 0]
-        # y = xyz[:, 1]
-        # z = xyz[:, 2]
-        # fe = -z + np.max(z)
-        #     print(np.min(fe), np.max(fe))
-        #     # set level increment every unit of kT
-        #     num_levels = int(np.floor((np.max(fe) - np.min(fe)) / 2.5))
-        #     levels = [k * 2.5 for k in range(num_levels + 2)]
-        #     ramachandran_from_x_y_z(x, y, fe, rotate, levels)
-        #     cntr2 = ax.tricontourf(x, y, z, levels=levels, cmap="RdBu_r")
-        #     ax.tricontour(x, y, z, levels=levels, linewidths=0.5, colors='k')
+        return
 
     def implied_timescale_analysis(self, max_lag: int = 10, k: int = 10):
         if self.discrete_traj is None:
@@ -612,3 +512,62 @@ class Experiment:
         bias_potential_traj = colvar[:, col_idx]  # [::500][:-1]
         weights = np.exp(self.beta * bias_potential_traj)
         return weights, bias_potential_traj
+
+    # ====================== OTHER HELPERS =================================
+    def _check_fes_arguments(
+        self,
+        features: list[str],
+        feature_nicknames: Optional[list[str]],
+    ) -> (list[str], str):
+        # Check that the experiment is featurized
+        if not self.features_provided:
+            raise ValueError(
+                "Cannot construct ramachandran plot for an unfeaturized trajectory. "
+                "Try reinitializing Experiment object with features defined."
+            )
+
+        # Check that the required features exist
+        for feature in features:
+            assert (
+                feature in self.featurizer.describe()
+            ), f"Feature '{feature}' not found in available features ({self.featurizer.describe()})"
+
+        # Automatically set feature nicknames if they are not provided
+        if not feature_nicknames:
+            feature_nicknames = features
+
+        return feature_nicknames
+
+    def _scatter_fes(self, ax, feature_traj: np.array, bins: int, nan_threshold: int):
+        free_energy, xedges, yedges = free_energy_estimate_2D(
+            ax,
+            remove_nans(feature_traj),
+            self.beta,
+            bins=bins,
+        )
+        masked_free_energy = np.ma.array(
+            free_energy, mask=(free_energy > nan_threshold)
+        )
+        im = ax.pcolormesh(xedges, yedges, masked_free_energy)
+
+        return ax, im
+
+    def _contour_fes(self, ax, feature_traj: np.array):
+        xyz = remove_nans(
+            np.hstack([feature_traj, np.array([self.bias_potential_traj]).T])
+        )
+        x = xyz[:, 0]
+        y = xyz[:, 1]
+        bias_potential = xyz[:, 2]
+        free_energy = -bias_potential + np.max(
+            bias_potential
+        )  # free energy is negative bias potential
+        # set level increment every unit of kT
+        num_levels = int(
+            np.floor((np.max(free_energy) - np.min(free_energy)) * self.beta)
+        )
+        levels = [k * 1 / self.beta for k in range(num_levels + 2)]  # todo: why +2?
+        im = ax.tricontourf(x, y, free_energy, levels=levels, cmap="RdBu_r")
+        ax.tricontour(x, y, free_energy, levels=levels, linewidths=0.5, colors="k")
+
+        return ax, im
