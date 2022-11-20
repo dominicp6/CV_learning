@@ -1,8 +1,3 @@
-import os
-from typing import Optional
-
-import mdtraj as md
-
 from utils.trajectory_utils import clean_and_align_trajectory
 
 if __name__ == "__main__":
