@@ -16,6 +16,8 @@ import matplotlib.ticker as tkr
 import seaborn as sns
 from pdbfixer import PDBFixer
 
+from utils.trajectory_utils import clean_and_align_trajectory
+
 SystemArgs = namedtuple(
     "System_Args",
     "pdb forcefield resume duration savefreq stepsize temperature pressure "
@@ -55,6 +57,20 @@ def stringify_named_tuple(obj: namedtuple):
     return dict_of_obj
 
 
+def check_fields_unchanged(old_dict: dict, update_dict: dict, fields: set[str]):
+    for field in fields:
+        assert old_dict[field] == update_dict[field], f"Cannot resume experiment because previous experiment had " \
+                                                      f"{field}={old_dict[field]}, which is not the same as " \
+                                                      f"{field}={update_dict[field]} specified in the new experiment."
+
+
+def update_numerical_fields(old_dict: dict, update_dict: dict, fields: set[str]):
+    for field in fields:
+        update_dict[field] = str(parse_quantity(old_dict[field]) + parse_quantity(update_dict[field])).replace(" ", "")
+
+    return update_dict
+
+
 def fix_pdb(path_to_file):
     print("Creating PDBFixer...")
     fixer = PDBFixer(path_to_file)
@@ -91,7 +107,17 @@ def fix_pdb(path_to_file):
     )
 
 
+def isnumber(s: str):
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
 def parse_quantity(s: str):
+    if isnumber(s):
+        return float(s)
     try:
         u = s.lstrip("0123456789.")
         v = s[: -len(u)]
@@ -100,11 +126,8 @@ def parse_quantity(s: str):
         raise ValueError(f"Invalid quantity: {s}")
 
 
-# TODO: duration and total steps correct in metadata when resuming
-# TODO: fix topology for periodic simulations (that are already solvated)
-
 class OpenMMSimulation:
-    # todo: finish pressure
+
     def __init__(self):
         # CONSTANTS
         self.CHECKPOINT_FN = "checkpoint.chk"
@@ -115,6 +138,13 @@ class OpenMMSimulation:
         self.valid_ffs = ["ani2x", "ani1ccx", "amber", "ani2x_mixed", "ani1ccx_mixed"]
         self.valid_precision = ["single", "mixed", "double"]
         self.valid_wms = ["tip3p", "tip3pfb", "spce", "tip4pew", "tip4pfb", "tip5p"]
+
+        # Properties that must be preserved when resuming a pre-existing simulation
+        self.preserved_properties = {'savefreq', 'stepsize', 'steps_per_save', 'temperature', 'pressure',
+                                     'frictioncoeff', 'solventpadding', 'nonbondedcutoff', 'cutoffmethod',
+                                     'periodic', 'precision', 'watermodel'}
+        # Properties that cumulate upon resuming a simulation
+        self.cumulative_properties = {'duration', 'total_steps'}
 
         # PROPERTIES
         self.systemargs = None
@@ -175,7 +205,7 @@ class OpenMMSimulation:
             "--frictioncoeff",
             default="1ps",
             help="Integrator friction coeff [your value]^-1 ie for 0.1fs^-1 put in 0.1fs. "
-            "The unit but not the value will be converted to its reciprocal.",
+                 "The unit but not the value will be converted to its reciprocal.",
         )
         parser.add_argument(
             "-sp",
@@ -276,7 +306,7 @@ class OpenMMSimulation:
             )
 
         if self.systemargs.resume is not None and not os.path.isdir(
-            self.systemargs.resume
+                self.systemargs.resume
         ):
             print(
                 f"Production directory to resume is not a directory: {self.systemargs.resume}"
@@ -331,12 +361,24 @@ class OpenMMSimulation:
         self.output_dir = output_dir
         return self.output_dir
 
-    # TODO: updating metadata correctly when resuming previous simulation run
     def save_simulation_metadata(self):
         args_as_dict = stringify_named_tuple(self.systemargs)
+        if self.systemargs.resume:
+            print('Updating metadata')
+            args_as_dict = self._update_existing_metadata(args_as_dict)
         print(args_as_dict)
         with open(os.path.join(self.output_dir, self.METADATA_FN), "w") as json_file:
             json.dump(args_as_dict, json_file)
+
+    def _update_existing_metadata(self, metadata_update: dict) -> dict:
+        assert os.path.exists(
+            os.path.join(self.output_dir, self.METADATA_FN)), "Cannot resume a simulation without metadata."
+        with open(os.path.join(self.output_dir, self.METADATA_FN), "r") as json_file:
+            metadata_existing = json.load(json_file)
+        check_fields_unchanged(metadata_existing, metadata_update, fields=self.preserved_properties)
+        metadata = update_numerical_fields(metadata_existing, metadata_update, fields=self.cumulative_properties)
+
+        return metadata
 
     def initialise_pdb(self) -> app.PDBFile:
         pdb = app.PDBFile(self.systemargs.pdb)
@@ -475,7 +517,7 @@ class OpenMMSimulation:
         else:
             # Run NPT simulation
             assert (
-               unit_cell_dims is not None
+                    unit_cell_dims is not None
             ), "Periodic boundary conditions not found in PDB file - cannot run NPT simulation."
             # default frequency for pressure changes is 25 time steps
             barostat = openmm.MonteCarloBarostat(
@@ -563,7 +605,7 @@ class OpenMMSimulation:
         )
 
     def run_simulation(self):
-        #input("> Please press any key to confirm this simulation...")
+        # input("> Please press any key to confirm this simulation...")
         print("Running production...")
         self.simulationprops.simulation.step(self.systemargs.total_steps)
         print("Done")
@@ -577,7 +619,11 @@ class OpenMMSimulation:
             os.path.join(self.output_dir, "end_state.xml")
         )
 
-    def post_analysis(self):
+    def post_processing_and_analysis(self):
+        clean_and_align_trajectory(working_dir=self.output_dir,
+                                   traj_name='trajectory.dcd',
+                                   top_name='topology.pdb',
+                                   save_name='trajectory_processed')
         report = pd.read_csv(os.path.join(self.output_dir, self.STATE_DATA_FN))
         self.make_graphs(report)
         self.make_summary_statistics(report)
@@ -631,7 +677,6 @@ class OpenMMSimulation:
             )
         with open(os.path.join(self.output_dir, "summary_statistics.json"), "w") as f:
             json.dump(statistics, f)
-
 
 # Next Steps
 # print a trajectory of the aaa dihedrals, counting the flips

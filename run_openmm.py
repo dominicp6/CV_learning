@@ -25,4 +25,4 @@ if __name__ == "__main__":
     MD_simulation.save_checkpoint()
 
     # Visualise simulation properties
-    MD_simulation.post_analysis()
+    MD_simulation.post_processing_and_analysis()
