@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 import copy
 
+import numpy as np
 import openmm
 import openmm.app as app
 import openmm.unit as unit
@@ -18,7 +19,7 @@ from pdbfixer import PDBFixer
 SystemArgs = namedtuple(
     "System_Args",
     "pdb forcefield resume duration savefreq stepsize temperature pressure "
-    "frictioncoeff total_steps steps_per_save nonperiodic gpu minimise precision watermodel",
+    "frictioncoeff solventpadding nonbondedcutoff cutoffmethod total_steps steps_per_save periodic gpu minimise precision watermodel",
 )
 
 SystemObjs = namedtuple("System_Objs", "pdb modeller peptide_indices system")
@@ -32,8 +33,17 @@ unit_labels = {
     "ns": unit.nanoseconds,
     "ps": unit.picoseconds,
     "fs": unit.femtoseconds,
+    "nm": unit.nanometers,
     "bar": unit.bar,
     "K": unit.kelvin,
+}
+
+cutoff_method = {
+    "NoCutoff": app.NoCutoff,
+    "CutoffNonPeriodic": app.CutoffNonPeriodic,
+    "CutoffPeriodic": app.CutoffPeriodic,
+    "Ewald": app.Ewald,
+    "PME": app.PME,
 }
 
 
@@ -89,9 +99,12 @@ def parse_quantity(s: str):
     except Exception:
         raise ValueError(f"Invalid quantity: {s}")
 
+
 # TODO: duration and total steps correct in metadata when resuming
+# TODO: fix topology for periodic simulations (that are already solvated)
 
 class OpenMMSimulation:
+    # todo: finish pressure
     def __init__(self):
         # CONSTANTS
         self.CHECKPOINT_FN = "checkpoint.chk"
@@ -152,7 +165,10 @@ class OpenMMSimulation:
             help="Temperature for Langevin dynamics",
         )
         parser.add_argument(
-            "-p", "--pressure", default="1bar", help="Pressure for MonteCarloBarostat"
+            "-p",
+            "--pressure",
+            default="",
+            help="Pressure (bar) for NPT simulation. If blank, an NVT simulation is run instead",
         )
         parser.add_argument(
             "-c",
@@ -162,10 +178,28 @@ class OpenMMSimulation:
             "The unit but not the value will be converted to its reciprocal.",
         )
         parser.add_argument(
-            "-np",
-            "--nonperiodic",
+            "-sp",
+            "--solventpadding",
+            default="1nm",
+            help="Solvent padding distance",
+        )
+        parser.add_argument(
+            "-nbc",
+            "--nonbondedcutoff",
+            default="1nm",
+            help="Non-bonded cutoff distance",
+        )
+        parser.add_argument(
+            "-cm",
+            "--cutoffmethod",
+            default="PME",
+            help="The non-bonded cutoff method to use, one of 'NoCutoff', 'CutoffNonPeriodic', 'CutoffPeriodic', 'Ewald', or 'PME'",
+        )
+        parser.add_argument(
+            "-pr",
+            "--periodic",
             action=argparse.BooleanOptionalAction,
-            help="Prevent periodic boundary conditions from being applied",
+            help="Applies periodic boundary conditions",
         )
         parser.add_argument(
             "-m",
@@ -186,14 +220,24 @@ class OpenMMSimulation:
         savefreq = parse_quantity(args.savefreq)
         stepsize = parse_quantity(args.stepsize)
         temperature = parse_quantity(args.temperature)
-        pressure = parse_quantity(args.pressure)
+        pressure = parse_quantity(args.pressure) if args.pressure else None
         frictioncoeff = parse_quantity(args.frictioncoeff)
+        solventpadding = parse_quantity(args.solventpadding)
+        nonbondedcutoff = parse_quantity(args.nonbondedcutoff)
+        cutoffmethod = args.cutoffmethod
         frictioncoeff = frictioncoeff._value / frictioncoeff.unit
         total_steps = int(duration / stepsize)
         steps_per_save = int(savefreq / stepsize)
-        nonperiodic = args.nonperiodic
+        periodic = args.periodic
         minimise = args.minimise
         watermodel = args.water
+
+        if not periodic:
+            assert cutoffmethod in [
+                "NoCutoff",
+                "CutoffNonPeriodic",
+            ], f"You have specified a non-periodic simulation but have given an incompatible cutoff method " \
+               f"({cutoffmethod}). Please change the cutoff method to either 'NoCutoff' or 'CutoffNonPeriodic'."
 
         self.systemargs = SystemArgs(
             pdb,
@@ -205,9 +249,12 @@ class OpenMMSimulation:
             temperature,
             pressure,
             frictioncoeff,
+            solventpadding,
+            nonbondedcutoff,
+            cutoffmethod,
             total_steps,
             steps_per_save,
-            nonperiodic,
+            periodic,
             gpu,
             minimise,
             precision,
@@ -293,7 +340,7 @@ class OpenMMSimulation:
 
     def initialise_pdb(self) -> app.PDBFile:
         pdb = app.PDBFile(self.systemargs.pdb)
-        if self.systemargs.nonperiodic:
+        if not self.systemargs.periodic:
             print("Setting non-periodic boundary conditions")
             pdb.topology.setPeriodicBoxVectors(None)
 
@@ -318,18 +365,22 @@ class OpenMMSimulation:
             # Do not make any modifications to the modeller
             pass
         else:
-            # Remove pre-existing water
-            modeller.deleteWater()
-            if self.systemargs.watermodel:
-                # Re-introduce water to the modeller
-                modeller.addSolvent(
-                    self.force_field,
-                    model=self.systemargs.watermodel,
-                    padding=1 * unit.nanometer,
-                )
+            # Check if the loaded topology file already has water
+            if np.any([atom.residue.name == 'HOH' for atom in pdb.topology.atoms()]):
+                print("Water found in PBD file: Not changing solvation properties; solvent padding ignored!")
+            # If no water present
             else:
-                # Do not add water to the modeller
-                pass
+                # If we are using a water model
+                if self.systemargs.watermodel:
+                    # Add water to the modeller
+                    modeller.addSolvent(
+                        self.force_field,
+                        model=self.systemargs.watermodel,
+                        padding=self.systemargs.solventpadding,
+                    )
+                else:
+                    # Do not add water to the modeller
+                    pass
 
         return modeller
 
@@ -347,24 +398,25 @@ class OpenMMSimulation:
             modeller_copy = copy.deepcopy(modeller)
             modeller_copy.deleteWater()
             pdb.writeFile(
-                modeller.getTopology(),
-                modeller.getPositions(),
+                modeller_copy.getTopology(),
+                modeller_copy.getPositions(),
                 open(os.path.join(self.output_dir, "topology_nw.pdb"), "w"),
             )
             del modeller_copy
 
     def create_system(self, pdb: app.PDBFile):
         """
-        nonbondedMethod - The method to use for nonbonded interactions.
-                          Allowed values are NoCutoff, CutoffNonPeriodic, CutoffPeriodic, Ewald, or PME.
+        # TODO: research which of these methods is best
+        nonbondedMethod - The cutoff method to use for nonbonded interactions.
         nonbondedCutoff - The cutoff distance to use for nonbonded interactions.
         constraints (object=None) – Specifies which bonds and angles should be implemented with constraints.
                                     Allowed values are None, HBonds, AllBonds, or HAngles.
         """
+        print(f"System size: {pdb.topology.getNumAtoms()}")
         return self.force_field.createSystem(
             pdb.topology,
-            nonbondedMethod=app.CutoffNonPeriodic,
-            nonbondedCutoff=1 * unit.nanometer,
+            nonbondedMethod=cutoff_method[self.systemargs.cutoffmethod],
+            nonbondedCutoff=self.systemargs.nonbondedcutoff,
             # constraints = app.AllBonds,
         )
 
@@ -372,7 +424,6 @@ class OpenMMSimulation:
         print("Setting up simulation...")
         self.initialise_simulation()
         print("[x] Initialised simulation")
-        self.save_simulation_metadata()
         if self.systemargs.minimise:
             print("Running energy minimisation...")
             # initial system energy
@@ -389,8 +440,21 @@ class OpenMMSimulation:
                     getEnergy=True
                 ).getPotentialEnergy()
             )
+            positions = self.simulationprops.simulation.context.getState(
+                getPositions=True
+            ).getPositions()
+            print("Writing minimised geometry to PDB file")
+            self.systemobjs.pdb.writeModel(
+                self.systemobjs.pdb.topology,
+                positions,
+                open(os.path.join(self.output_dir, "minimised.pdb"), "w"),
+            )
             print("[x] Finished minimisation")
+        self.simulationprops.simulation.context.setVelocitiesToTemperature(
+            self.systemargs.temperature
+        )
         self.setup_reporters()
+        self.save_simulation_metadata()
         print("Successfully setup simulation")
 
     def initialise_simulation(self):
@@ -399,8 +463,29 @@ class OpenMMSimulation:
             "Precision": self.systemargs.precision,
         }
 
-        # TODO: add barostat
-        # self.systemobjs.system.addForce(openmm.MonteCarloBarostat(self.systemargs.pressure, self.systemargs.temperature))
+        unit_cell_dims = self.systemobjs.pdb.getTopology().getUnitCellDimensions()
+        if self.systemargs.periodic:
+            print(f"Unit cell dimensions: {unit_cell_dims}, Cutoff distance: {self.systemargs.nonbondedcutoff}.")
+
+        if self.systemargs.pressure is None:
+            # Run NVT simulation
+            print(
+                f"Running NVT simulation at temperature {self.systemargs.temperature}."
+            )
+        else:
+            # Run NPT simulation
+            assert (
+               unit_cell_dims is not None
+            ), "Periodic boundary conditions not found in PDB file - cannot run NPT simulation."
+            # default frequency for pressure changes is 25 time steps
+            barostat = openmm.MonteCarloBarostat(
+                self.systemargs.pressure, self.systemargs.temperature, 25,
+            )
+            self.systemobjs.system.addForce(barostat)
+            print(
+                f"Running NPT simulation at temperature {self.systemargs.temperature} "
+                f"and pressure {self.systemargs.pressure}."
+            )
 
         # Create constant temp integrator
         integrator = openmm.LangevinMiddleIntegrator(
@@ -440,6 +525,7 @@ class OpenMMSimulation:
             )
         )
         # Reporter to log lots of info to csv
+        # TODO: add configurational energy report
         self.simulationprops.simulation.reporters.append(
             app.StateDataReporter(
                 os.path.join(self.output_dir, self.STATE_DATA_FN),
@@ -451,6 +537,10 @@ class OpenMMSimulation:
                 potentialEnergy=True,
                 kineticEnergy=True,
                 totalEnergy=True,
+                volume=True
+                if self.systemargs.pressure
+                else False,  # record volume and density for NPT simulations
+                density=True if self.systemargs.pressure else False,
                 append=True if self.systemargs.resume else False,
             )
         )
@@ -473,6 +563,7 @@ class OpenMMSimulation:
         )
 
     def run_simulation(self):
+        #input("> Please press any key to confirm this simulation...")
         print("Running production...")
         self.simulationprops.simulation.step(self.systemargs.total_steps)
         print("Done")
@@ -486,11 +577,13 @@ class OpenMMSimulation:
             os.path.join(self.output_dir, "end_state.xml")
         )
 
-    def make_graphs(self):
-        # Make some graphs
+    def post_analysis(self):
         report = pd.read_csv(os.path.join(self.output_dir, self.STATE_DATA_FN))
-        report = report.melt()
+        self.make_graphs(report)
+        self.make_summary_statistics(report)
 
+    def make_graphs(self, report):
+        report = report.melt()
         with sns.plotting_context("paper"):
             g = sns.FacetGrid(data=report, row="variable", sharey=False)
             g.map(plt.plot, "value")
@@ -504,6 +597,40 @@ class OpenMMSimulation:
             plt.savefig(
                 os.path.join(self.output_dir, "graphs.png"), bbox_inches="tight"
             )
+
+    def make_summary_statistics(self, report):
+        statistics = dict()
+        statistics["PE"] = report["Potential Energy (kJ/mole)"].mean()
+        statistics["dPE"] = report["Potential Energy (kJ/mole)"].std() / np.sqrt(
+            self.systemargs.duration / self.systemargs.savefreq
+        )
+        statistics["KE"] = report["Kinetic Energy (kJ/mole)"].mean()
+        statistics["dKE"] = report["Kinetic Energy (kJ/mole)"].std() / np.sqrt(
+            self.systemargs.duration / self.systemargs.savefreq
+        )
+        statistics["TE"] = report["Total Energy (kJ/mole)"].mean()
+        statistics["dTE"] = report["Total Energy (kJ/mole)"].std() / np.sqrt(
+            self.systemargs.duration / self.systemargs.savefreq
+        )
+        statistics["T"] = report["Temperature (K)"].mean()
+        statistics["dT"] = report["Temperature (K)"].std() / np.sqrt(
+            self.systemargs.duration / self.systemargs.savefreq
+        )
+        statistics["S"] = report["Speed (ns/day)"].mean()
+        statistics["dS"] = report["Speed (ns/day)"].std() / np.sqrt(
+            self.systemargs.duration / self.systemargs.savefreq
+        )
+        if self.systemargs.pressure:  # volume and pressure recorded for NPT simulations
+            statistics["V"] = report["Box Volume (nm^3)"].mean()
+            statistics["dV"] = report["Box Volume (nm^3)"].std() / np.sqrt(
+                self.systemargs.duration / self.systemargs.savefreq
+            )
+            statistics["D"] = report["Density (g/mL)"].mean()
+            statistics["dD"] = report["Density (g/mL)"].std() / np.sqrt(
+                self.systemargs.duration / self.systemargs.savefreq
+            )
+        with open(os.path.join(self.output_dir, "summary_statistics.json"), "w") as f:
+            json.dump(statistics, f)
 
 
 # Next Steps

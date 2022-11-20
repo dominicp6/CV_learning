@@ -7,10 +7,11 @@
 
    Author: Dominic Phillips (dominicp6)
 """
-
+import contextlib
 import os
 import glob
 import json
+import copy
 from time import time
 from typing import Union, Optional
 
@@ -22,6 +23,10 @@ import pyemma
 import deeptime
 import numpy as np
 import matplotlib.pyplot as plt
+import sklearn
+from deeptime.util.validation import implied_timescales
+from deeptime.plots import plot_implied_timescales
+from tqdm import tqdm
 
 from KramersRateEvaluator import KramersRateEvaluator
 from Dihedrals import Dihedrals
@@ -56,7 +61,12 @@ from utils.plotting_functions import init_plot, save_fig
 #     plt.xticks(np.arange(-3, 4, 1))
 #     plt.subplots_adjust(hspace=0.5)
 #
-
+def supress_stdout(func):
+    def wrapper(*a, **ka):
+        with open(os.devnull, 'w') as devnull:
+            with contextlib.redirect_stdout(devnull):
+                return func(*a, **ka)
+    return wrapper
 
 def remove_nans(data: np.array, axis: int = 1) -> np.array:
     num_nans = np.count_nonzero(np.isnan(data))
@@ -288,45 +298,58 @@ class Experiment:
 
         return
 
-    def implied_timescale_analysis(self, max_lag: int = 10, k: int = 10):
-        if self.discrete_traj is None:
-            cluster = pyemma.coordinates.cluster_kmeans(self.featurized_traj, k=k)
-            self.discrete_traj = cluster.dtrajs[0]
-        its = pyemma.msm.its(self.discrete_traj, lags=max_lag)
-        pyemma.plots.plot_implied_timescales(its)
+    def implied_timescale_analysis(self, max_lag: int = 10, increment: int = 1):
+        lagtimes = np.arange(1, max_lag, increment)
+        # save current TICA obj
+        TICA_obj = copy.deepcopy(self.CVs['TICA'])
+        models = []
+        for lagtime in tqdm(lagtimes):
+            supress_stdout(self.compute_cv)('TICA', lagtime=lagtime)
+            models.append(self.CVs['TICA'])
+        self.CVs['TICA'] = TICA_obj
+        its_data = implied_timescales(models)
+        fig, ax = init_plot('Implied timescales (TICA)', 'lag time (steps)', 'timescale (steps)', yscale='log')
+        plot_implied_timescales(its_data, n_its=2, ax=ax)
+        plt.show()
 
-    def compute_cv(self, CV: str, dim: int, stride: int = 1, **kwargs):
+    def compute_cv(self, CV: str, dim: Optional[int]=None, stride: int = 1, **kwargs):
+        """
+
+        :param CV:
+        :param dim: Number of dimensions to keep.
+        :param stride:
+        :param kwargs: Any additional keyword arguments for the decomposition functions.
+        :return: None
+        """
         assert CV in self.CVs.keys(), f"Method '{CV}' not in {self.CVs.keys()}"
-        # TODO: implement stride
         t0 = time()
         # Trajectory is either featurized or unfeaturized (cartesian coords), depending on object initialisation.
-        trajectory = self.featurized_traj if self.features_provided else self.traj
+        trajectory = self.featurized_traj if self.features_provided else self.traj.xyz
         if CV == "PCA":
-            self.CVs[CV] = pyemma.coordinates.pca(
-                trajectory.xyz, dim=dim, stride=stride
-            )
+            self.CVs[CV] = sklearn.decomposition.PCA(n_components=dim, **kwargs).fit(trajectory[::stride])
         elif CV == "TICA":
             assert_kwarg(kwargs, kwarg="lagtime", CV=CV)
             # other kwargs: epsilon, var_cutoff, scaling, observable_transform
             self.CVs[CV] = deeptime.decomposition.TICA(dim=dim, **kwargs).fit_fetch(
-                trajectory.xyz
+                trajectory[::stride]
             )
         elif CV == "VAMP":
             assert_kwarg(kwargs, kwarg="lagtime", CV=CV)
             # other kwargs: epsilon, var_cutoff, scaling, epsilon, observable_transform
             self.CVs[CV] = deeptime.decomposition.VAMP(dim=dim, **kwargs).fit_fetch(
-                trajectory.xyz
+                trajectory[::stride]
             )
         elif CV == "DMD":
             # other kwargs: mode, rank, exact
             self.CVs[CV] = deeptime.decomposition.DMD(**kwargs).fit_fetch(
-                trajectory.xyz
+                trajectory[::stride]
             )
         elif CV == "DM":
             if kwargs is None:
                 kwargs = self.DM_DEFAULTS
             dm = dfm.DiffusionMap.from_sklearn(**kwargs)
             self.CVs[CV] = dm.fit(trajectory[::stride])
+        # TODO: VAMPnets
         t1 = time()
         print(f"Computed CV in {round(t1 - t0, 3)}s.")
 
@@ -336,7 +359,7 @@ class Experiment:
         self.kre.fit(
             self._get_cv(CV, dimension),
             beta=self.beta,
-            time_step=self.stepsize.value,
+            time_step=self.stepsize,
             lag=lag,
             sigmaD=sigmaD,
             sigmaF=sigmaF,
