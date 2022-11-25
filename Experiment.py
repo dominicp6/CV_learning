@@ -18,6 +18,7 @@ from typing import Union, Optional
 import dill
 import mdtraj as md
 import mdtraj  # todo: remove
+import networkx as nx
 import pandas as pd
 import pyemma
 import deeptime
@@ -26,13 +27,16 @@ import matplotlib.pyplot as plt
 import sklearn
 from deeptime.util.validation import implied_timescales
 from deeptime.plots import plot_implied_timescales
+from deeptime.clustering import KMeans
+from deeptime.markov import TransitionCountEstimator
+from deeptime.markov.msm import MaximumLikelihoodMSM
 from tqdm import tqdm
 
 from KramersRateEvaluator import KramersRateEvaluator
 from Dihedrals import Dihedrals
 from analine_free_energy import compute_dihedral_trajectory
 from utils.diffusion_utils import free_energy_estimate_2D
-import pydiffmap.diffusion_map as dfm
+#import pydiffmap.diffusion_map as dfm
 import mdfeature.features as feat
 from utils.openmm_utils import parse_quantity
 from utils.plotting_functions import init_plot, save_fig
@@ -264,6 +268,9 @@ class Experiment:
         self.kre = KramersRateEvaluator()
         self.discrete_traj = None
 
+    def get_trajectory(self):
+        return self.featurized_traj if self.features_provided else self.traj.xyz
+
     def free_energy_plot(
         self,
         features: list[str],
@@ -298,6 +305,61 @@ class Experiment:
 
         return
 
+    def markov_state_model(self):
+        samples = self.get_trajectory()
+
+        # Clustering
+        print("Clustering")
+        estimator = KMeans(n_clusters=100, init_strategy='kmeans++', fixed_seed=13, n_jobs=os.cpu_count()-1, progress=tqdm)
+        clustering = estimator.fit(samples).fetch_model()
+        fig, ax = init_plot("Inertia of KMeans Training", "iteration", "inertia", xscale="log")
+        ax.plot(clustering.inertias)
+        plt.show()
+
+        # Discrete trajectory
+        print("Getting discrete trajectory")
+        discrete_traj = clustering.transform(samples)
+
+        # Transition count model
+        print("Computing transition count model")
+        estimator = TransitionCountEstimator(lagtime=1, count_mode="sliding")
+        counts = estimator.fit(discrete_traj).fetch_model()
+        print("Weakly connected sets:", counts.connected_sets(directed=False))
+        print("Strongly connected sets:", counts.connected_sets(directed=True))
+
+        # MSM
+        print("Computing MSM")
+        estimator = MaximumLikelihoodMSM(reversible=True, stationary_distribution_constraint=None)
+        msm = estimator.fit(counts).fetch_model()
+
+        # - plot timescales
+        fix, ax = init_plot("MSM State Timescales", "state", f"timescale (x{self.savefreq})")
+        ax.plot(msm.timescales('o'))
+        plt.show()
+
+        # - plot transition matrix with connectivity threshold
+        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+        threshold = 1e-2
+        title = f"Transition matrix with connectivity threshold {threshold:.0e}"
+        G = nx.DiGraph()
+        ax.set_title(title)
+        for i in range(msm.n_states):
+            G.add_node(i, title=f"{i + 1}")
+        for i in range(msm.n_states):
+            for j in range(msm.n_states):
+                if msm.transition_matrix[i, j] > threshold:
+                    G.add_edge(i, j, title=f"{msm.transition_matrix[i, j]:.3e}")
+
+        edge_labels = nx.get_edge_attributes(G, 'title')
+        pos = nx.fruchterman_reingold_layout(G)
+        nx.draw_networkx_nodes(G, pos, ax=ax)
+        nx.draw_networkx_labels(G, pos, ax=ax, labels=nx.get_node_attributes(G, 'title'))
+        nx.draw_networkx_edges(G, pos, ax=ax, arrowstyle='-|>',
+                               connectionstyle='arc3, rad=0.3')
+
+
+    # TODO: add PCCA+ function for "coarse graining" the MSM
+
     def implied_timescale_analysis(self, max_lag: int = 10, increment: int = 1):
         lagtimes = np.arange(1, max_lag, increment)
         # save current TICA obj
@@ -324,7 +386,7 @@ class Experiment:
         assert CV in self.CVs.keys(), f"Method '{CV}' not in {self.CVs.keys()}"
         t0 = time()
         # Trajectory is either featurized or unfeaturized (cartesian coords), depending on object initialisation.
-        trajectory = self.featurized_traj if self.features_provided else self.traj.xyz
+        trajectory = self.get_trajectory()
         if CV == "PCA":
             self.CVs[CV] = sklearn.decomposition.PCA(n_components=dim, **kwargs).fit(trajectory[::stride])
         elif CV == "TICA":
