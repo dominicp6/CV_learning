@@ -1,4 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.10 (CV_learning)" project-jdk-type="Python SDK" />
+  <component name="UnattendedHostPersistenceState">
+    <option name="openedFilesInfos">
+      <list>
+        <OpenedFileInfo>
+          <option name="caretOffset" value="50" />
+          <option name="fileUrl" value="file://$PROJECT_DIR$/exp/exp_script.py" />
+        </OpenedFileInfo>
+        <OpenedFileInfo>
+          <option name="caretOffset" value="986" />
+          <option name="fileUrl" value="file://$PROJECT_DIR$/utils/plotting_functions.py" />
+        </OpenedFileInfo>
+        <OpenedFileInfo>
+          <option name="caretOffset" value="12754" />
+          <option name="fileUrl" value="file://$PROJECT_DIR$/Experiment.py" />
+        </OpenedFileInfo>
+      </list>
+    </option>
+  </component>
 </project>

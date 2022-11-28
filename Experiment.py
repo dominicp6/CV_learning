@@ -39,7 +39,7 @@ from utils.diffusion_utils import free_energy_estimate_2D
 #import pydiffmap.diffusion_map as dfm
 import mdfeature.features as feat
 from utils.openmm_utils import parse_quantity
-from utils.plotting_functions import init_plot, save_fig
+from utils.plotting_functions import init_plot, init_subplot, save_fig
 
 # TODO: think what is happening to water molecules in the trajectory
 #
@@ -120,7 +120,7 @@ def load_dihedral_trajectory(loc: str, dihedral_pickle_file: str) -> list:
     dihedral_traj[:, [0, 1]] = dihedral_traj[:, [1, 0]]
     return dihedral_traj
 
-
+# TODO: possibly replace with mdtraj featurizer
 def initialise_featurizer(
     dihedral_features: Union[dict, str], topology
 ) -> pyemma.coordinates.featurizer:
@@ -359,6 +359,22 @@ class Experiment:
 
 
     # TODO: add PCCA+ function for "coarse graining" the MSM
+    def contact_graphs(self):
+        fig, ax = init_subplot(nrows=2, ncols=4, title='Contact Plot Analysis', xlabel='time (ns)', ylabel='')
+        # three contact maps at start, middle and end of trajectory
+        # TODO: fix, maybe only find subset of contacts?
+        ax[0, 0] = plt.imshow(mdtraj.geometry.squareform(**mdtraj.compute_contacts(self.traj[0])))
+        ax[0, 1] = plt.imshow(mdtraj.geometry.squareform(**mdtraj.compute_contacts(self.traj[0])))
+        ax[0, 2] = plt.imshow(mdtraj.geometry.squareform(**mdtraj.compute_contacts(self.traj[0])))
+
+        distances, pairs = mdtraj.compute_contacts(self.traj)
+        threshold = 2
+        number_of_close_contacts = np.sum((distances < threshold), axis=1)  # sum along the columns (contacts)
+        # TODO: add labelling
+        # plot of number of contacts in the trajectory as a function of time
+        ax[1, :] = plt.plot(number_of_close_contacts)
+
+        plt.show()
 
     def implied_timescale_analysis(self, max_lag: int = 10, increment: int = 1):
         lagtimes = np.arange(1, max_lag, increment)
