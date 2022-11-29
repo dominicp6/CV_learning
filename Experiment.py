@@ -12,6 +12,7 @@ import os
 import glob
 import json
 import copy
+import math
 from time import time
 from typing import Union, Optional
 
@@ -30,6 +31,7 @@ from deeptime.plots import plot_implied_timescales
 from deeptime.clustering import KMeans
 from deeptime.markov import TransitionCountEstimator
 from deeptime.markov.msm import MaximumLikelihoodMSM
+from deeptime.markov.tools.analysis import mfpt
 from tqdm import tqdm
 
 from KramersRateEvaluator import KramersRateEvaluator
@@ -158,16 +160,28 @@ def slice_array(data: np.array, quantity: int) -> Union[np.array, None]:
         return data[:quantity]
 
 
+def get_feature_ids_from_names(
+        feature_names: list[str],
+        featurizer: pyemma.coordinates.featurizer,
+):
+    all_features = featurizer.describe()
+    feature_ids = []
+    for feature in feature_names:
+        feature_ids.append(all_features.index(feature))
+
+    return feature_ids
+
+
 def get_feature_trajs_from_names(
     feature_names: list[str],
     featurized_traj: np.array,
     featurizer: pyemma.coordinates.featurizer,
 ) -> np.array:
-    all_features = featurizer.describe()
+
+    feature_ids = get_feature_ids_from_names(feature_names, featurizer)
 
     feature_trajs = []
-    for feature in feature_names:
-        feature_id = all_features.index(feature)
+    for feature_id in feature_ids:
         feature_trajs.append(featurized_traj[:, feature_id])
 
     return np.array(feature_trajs)
@@ -200,6 +214,181 @@ def write_metadynamics_line(height: float, pace: int, CV: str, file):
     print(output + '"')
     file.writelines(output + '"' + "\n")
     file.close()
+
+
+def round_format_unit(unit, significant_figures: int):
+    return f'{round(unit._value,significant_figures)} {unit.unit.get_symbol()}'
+
+
+def my_draw_networkx_edge_labels(
+    G,
+    pos,
+    edge_labels=None,
+    label_pos=0.5,
+    font_size=10,
+    font_color="k",
+    font_family="sans-serif",
+    font_weight="normal",
+    alpha=None,
+    bbox=None,
+    horizontalalignment="center",
+    verticalalignment="center",
+    ax=None,
+    rotate=True,
+    clip_on=True,
+    rad=0
+):
+    """Draw edge labels.
+
+    Parameters
+    ----------
+    G : graph
+        A networkx graph
+
+    pos : dictionary
+        A dictionary with nodes as keys and positions as values.
+        Positions should be sequences of length 2.
+
+    edge_labels : dictionary (default={})
+        Edge labels in a dictionary of labels keyed by edge two-tuple.
+        Only labels for the keys in the dictionary are drawn.
+
+    label_pos : float (default=0.5)
+        Position of edge label along edge (0=head, 0.5=center, 1=tail)
+
+    font_size : int (default=10)
+        Font size for text labels
+
+    font_color : string (default='k' black)
+        Font color string
+
+    font_weight : string (default='normal')
+        Font weight
+
+    font_family : string (default='sans-serif')
+        Font family
+
+    alpha : float or None (default=None)
+        The text transparency
+
+    bbox : Matplotlib bbox, optional
+        Specify text box properties (e.g. shape, color etc.) for edge labels.
+        Default is {boxstyle='round', ec=(1.0, 1.0, 1.0), fc=(1.0, 1.0, 1.0)}.
+
+    horizontalalignment : string (default='center')
+        Horizontal alignment {'center', 'right', 'left'}
+
+    verticalalignment : string (default='center')
+        Vertical alignment {'center', 'top', 'bottom', 'baseline', 'center_baseline'}
+
+    ax : Matplotlib Axes object, optional
+        Draw the graph in the specified Matplotlib axes.
+
+    rotate : bool (deafult=True)
+        Rotate edge labels to lie parallel to edges
+
+    clip_on : bool (default=True)
+        Turn on clipping of edge labels at axis boundaries
+
+    Returns
+    -------
+    dict
+        `dict` of labels keyed by edge
+
+    Examples
+    --------
+    >>> G = nx.dodecahedral_graph()
+    >>> edge_labels = nx.draw_networkx_edge_labels(G, pos=nx.spring_layout(G))
+
+    Also see the NetworkX drawing examples at
+    https://networkx.org/documentation/latest/auto_examples/index.html
+
+    See Also
+    --------
+    draw
+    draw_networkx
+    draw_networkx_nodes
+    draw_networkx_edges
+    draw_networkx_labels
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if ax is None:
+        ax = plt.gca()
+    if edge_labels is None:
+        labels = {(u, v): d for u, v, d in G.edges(data=True)}
+    else:
+        labels = edge_labels
+    text_items = {}
+    for (n1, n2), label in labels.items():
+        (x1, y1) = pos[n1]
+        (x2, y2) = pos[n2]
+        (x, y) = (
+            x1 * label_pos + x2 * (1.0 - label_pos),
+            y1 * label_pos + y2 * (1.0 - label_pos),
+        )
+        pos_1 = ax.transData.transform(np.array(pos[n1]))
+        pos_2 = ax.transData.transform(np.array(pos[n2]))
+        linear_mid = 0.5*pos_1 + 0.5*pos_2
+        d_pos = pos_2 - pos_1
+        rotation_matrix = np.array([(0,1), (-1,0)])
+        ctrl_1 = linear_mid + rad*rotation_matrix@d_pos
+        ctrl_mid_1 = 0.5*pos_1 + 0.5*ctrl_1
+        ctrl_mid_2 = 0.5*pos_2 + 0.5*ctrl_1
+        bezier_mid = 0.5*ctrl_mid_1 + 0.5*ctrl_mid_2
+        (x, y) = ax.transData.inverted().transform(bezier_mid)
+
+        if rotate:
+            # in degrees
+            angle = np.arctan2(y2 - y1, x2 - x1) / (2.0 * np.pi) * 360
+            # make label orientation "right-side-up"
+            if angle > 90:
+                angle -= 180
+            if angle < -90:
+                angle += 180
+            # transform data coordinate angle to screen coordinate angle
+            xy = np.array((x, y))
+            trans_angle = ax.transData.transform_angles(
+                np.array((angle,)), xy.reshape((1, 2))
+            )[0]
+        else:
+            trans_angle = 0.0
+        # use default box of white with white border
+        if bbox is None:
+            bbox = dict(boxstyle="round", ec=(1.0, 1.0, 1.0), fc=(1.0, 1.0, 1.0))
+        if not isinstance(label, str):
+            label = str(label)  # this makes "1" and 1 labeled the same
+
+        t = ax.text(
+            x,
+            y,
+            label,
+            size=font_size,
+            color=font_color,
+            family=font_family,
+            weight=font_weight,
+            alpha=alpha,
+            horizontalalignment=horizontalalignment,
+            verticalalignment=verticalalignment,
+            rotation=trans_angle,
+            transform=ax.transData,
+            bbox=bbox,
+            zorder=1,
+            clip_on=clip_on,
+        )
+        text_items[(n1, n2)] = t
+
+    ax.tick_params(
+        axis="both",
+        which="both",
+        bottom=False,
+        left=False,
+        labelbottom=False,
+        labelleft=False,
+    )
+
+    return text_items
 
 
 class Experiment:
@@ -279,6 +468,7 @@ class Experiment:
         save_name="free_energy_plot",
         data_fraction: float = 1.0,
         bins: int = 100,
+        landmark_points: Optional[dict[str, tuple[float, float]]] = None,
     ) -> None:
         feature_nicknames = self._check_fes_arguments(features, feature_nicknames)
         fig, ax = init_plot(
@@ -301,28 +491,44 @@ class Experiment:
             f"$F({feature_nicknames[0]},{feature_nicknames[1]})$ / kJ mol$^{{-1}}$"
         )
         plt.gca().set_aspect("equal")
+        if landmark_points:
+            for point, coordinates in landmark_points.items():
+                plt.plot(coordinates[0], coordinates[1], marker='o', markerfacecolor='k')
+                plt.annotate(point, coordinates)
         save_fig(fig, save_dir=os.getcwd(), name=save_name)
 
         return
 
-    def markov_state_model(self):
+    def markov_state_model(self, n_clusters: int, lagtime: str, features: list[str], feature_nicknames: Optional[list[str]] = None):
         samples = self.get_trajectory()
+        lagtime = parse_quantity(lagtime)
+        lagstep = math.floor(lagtime/self.savefreq)
+        if lagstep < 1:
+            raise ValueError(f"Lagtime provided ({lagtime}) is less than the saving interval of the trajectory ({self.savefreq}).")
+        else:
+            print(f"Lagtime {lagtime} corresponds to a lag step of {lagstep}.")
+
 
         # Clustering
+        # TODO: make clustering work for sin, cos features
         print("Clustering")
-        estimator = KMeans(n_clusters=100, init_strategy='kmeans++', fixed_seed=13, n_jobs=os.cpu_count()-1, progress=tqdm)
+        estimator = KMeans(n_clusters=n_clusters, init_strategy='kmeans++', fixed_seed=13, n_jobs=os.cpu_count()-1, progress=tqdm)
         clustering = estimator.fit(samples).fetch_model()
         fig, ax = init_plot("Inertia of KMeans Training", "iteration", "inertia", xscale="log")
+        """
+        Inertia measures how well a dataset was clustered by K-Means. It is calculated by measuring the distance 
+        between each data point and its centroid, squaring this distance, and summing these squares across one cluster.
+        """
         ax.plot(clustering.inertias)
         plt.show()
 
         # Discrete trajectory
         print("Getting discrete trajectory")
         discrete_traj = clustering.transform(samples)
-
+        print("Cluster centres", clustering.cluster_centers)
         # Transition count model
         print("Computing transition count model")
-        estimator = TransitionCountEstimator(lagtime=1, count_mode="sliding")
+        estimator = TransitionCountEstimator(lagtime=lagstep, count_mode="sliding")
         counts = estimator.fit(discrete_traj).fetch_model()
         print("Weakly connected sets:", counts.connected_sets(directed=False))
         print("Strongly connected sets:", counts.connected_sets(directed=True))
@@ -334,7 +540,7 @@ class Experiment:
 
         # - plot timescales
         fix, ax = init_plot("MSM State Timescales", "state", f"timescale (x{self.savefreq})")
-        ax.plot(msm.timescales('o'))
+        ax.plot(msm.timescales())
         plt.show()
 
         # - plot transition matrix with connectivity threshold
@@ -343,19 +549,34 @@ class Experiment:
         title = f"Transition matrix with connectivity threshold {threshold:.0e}"
         G = nx.DiGraph()
         ax.set_title(title)
+        edge_labels = {}
         for i in range(msm.n_states):
             G.add_node(i, title=f"{i + 1}")
         for i in range(msm.n_states):
             for j in range(msm.n_states):
                 if msm.transition_matrix[i, j] > threshold:
-                    G.add_edge(i, j, title=f"{msm.transition_matrix[i, j]:.3e}")
+                    transition_time = mfpt(msm.transition_matrix, target=j, origin=i, tau=lagstep)
+                    G.add_edge(i, j)
+                    edge_labels[(i, j)] = f"{msm.transition_matrix[i, j]:.3e} ({round_format_unit(transition_time * self.savefreq, 3)})"
 
-        edge_labels = nx.get_edge_attributes(G, 'title')
+        #edge_labels = nx.get_edge_attributes(G, 'title')
         pos = nx.fruchterman_reingold_layout(G)
         nx.draw_networkx_nodes(G, pos, ax=ax)
         nx.draw_networkx_labels(G, pos, ax=ax, labels=nx.get_node_attributes(G, 'title'))
         nx.draw_networkx_edges(G, pos, ax=ax, arrowstyle='-|>',
                                connectionstyle='arc3, rad=0.3')
+        my_draw_networkx_edge_labels(G, pos, ax=ax, edge_labels=edge_labels, rotate=False, rad=0.25)
+
+        print(clustering.cluster_centers)
+        feature_ids = get_feature_ids_from_names(features, self.featurizer)
+        assert len(feature_ids) == 2
+        print(feature_ids)
+        landmark_points = {}
+        for i in range(msm.n_states):
+            landmark_points[str(i+1)] = tuple(clustering.cluster_centers[i, feature_ids])
+
+        self.free_energy_plot(features, feature_nicknames, landmark_points=landmark_points)
+
 
 
     # TODO: add PCCA+ function for "coarse graining" the MSM

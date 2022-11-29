@@ -14,7 +14,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as tkr
 import seaborn as sns
-from pdbfixer import PDBFixer
+# from pdbfixer import PDBFixer
 
 from utils.trajectory_utils import clean_and_align_trajectory
 
@@ -71,40 +71,40 @@ def update_numerical_fields(old_dict: dict, update_dict: dict, fields: set[str])
     return update_dict
 
 
-def fix_pdb(path_to_file):
-    print("Creating PDBFixer...")
-    fixer = PDBFixer(path_to_file)
-    print("Finding missing residues...")
-    fixer.findMissingResidues()
-
-    chains = list(fixer.topology.chains())
-    keys = fixer.missingResidues.keys()
-    for key in list(keys):
-        chain = chains[key[0]]
-        if key[1] == 0 or key[1] == len(list(chain.residues())):
-            del fixer.missingResidues[key]
-
-    print("Finding nonstandard residues...")
-    fixer.findNonstandardResidues()
-    print("Replacing nonstandard residues...")
-    fixer.replaceNonstandardResidues()
-    print("Removing heterogens...")
-    fixer.removeHeterogens(keepWater=True)
-
-    print("Finding missing atoms...")
-    fixer.findMissingAtoms()
-    print("Adding missing atoms...")
-    fixer.addMissingAtoms()
-    print("Adding missing hydrogens...")
-    fixer.addMissingHydrogens(7)
-    print("Writing PDB file...")
-
-    app.pdbfile.PDBFile.writeFile(
-        fixer.topology,
-        fixer.positions,
-        open(f"{path_to_file[:-4]}_fixed.pdb", "w"),
-        keepIds=True,
-    )
+# def fix_pdb(path_to_file):
+#     print("Creating PDBFixer...")
+#     fixer = PDBFixer(path_to_file)
+#     print("Finding missing residues...")
+#     fixer.findMissingResidues()
+#
+#     chains = list(fixer.topology.chains())
+#     keys = fixer.missingResidues.keys()
+#     for key in list(keys):
+#         chain = chains[key[0]]
+#         if key[1] == 0 or key[1] == len(list(chain.residues())):
+#             del fixer.missingResidues[key]
+#
+#     print("Finding nonstandard residues...")
+#     fixer.findNonstandardResidues()
+#     print("Replacing nonstandard residues...")
+#     fixer.replaceNonstandardResidues()
+#     print("Removing heterogens...")
+#     fixer.removeHeterogens(keepWater=True)
+#
+#     print("Finding missing atoms...")
+#     fixer.findMissingAtoms()
+#     print("Adding missing atoms...")
+#     fixer.addMissingAtoms()
+#     print("Adding missing hydrogens...")
+#     fixer.addMissingHydrogens(7)
+#     print("Writing PDB file...")
+#
+#     app.pdbfile.PDBFile.writeFile(
+#         fixer.topology,
+#         fixer.positions,
+#         open(f"{path_to_file[:-4]}_fixed.pdb", "w"),
+#         keepIds=True,
+#     )
 
 
 def isnumber(s: str):

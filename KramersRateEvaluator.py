@@ -26,7 +26,7 @@ from typing import Optional, Union
 import pandas as pd
 import numpy as np
 import pyemma
-from autoimpute.imputations import MiceImputer
+#from autoimpute.imputations import MiceImputer
 from itertools import permutations
 from pyemma.coordinates.clustering import RegularSpaceClustering, KmeansClustering
 import matplotlib as plt
@@ -42,7 +42,7 @@ class KramersRateEvaluator:
                  default_clustering: Union[RegularSpaceClustering, KmeansClustering] = None
                  ):
         self.verbose = verbose
-        self.imputer = MiceImputer(strategy={"F": "interpolate"}, n=1, return_list=True)
+        self.imputer = None #MiceImputer(strategy={"F": "interpolate"}, n=1, return_list=True)
         self.default_clustering = default_clustering
         self.number_of_default_clusters = (
             None
