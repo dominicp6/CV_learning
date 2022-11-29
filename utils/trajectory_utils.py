@@ -25,3 +25,6 @@ def clean_and_align_trajectory(working_dir: str, top_name: str, traj_name: str, 
     if save_name:
         print('Saving modified trajectory')
         mtraj.save(os.path.join(working_dir, f'{save_name}.dcd'))
+        print('Saving modified PDB file')
+        pdb = mtraj.slice(0)
+        pdb.save_pdb(os.path.join(working_dir, f'{save_name}.pdb'))
