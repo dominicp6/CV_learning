@@ -21,6 +21,21 @@ plt.rc("figure", titlesize=MEGA_SIZE)  # fontsize of the figure title
 plt.style.use('seaborn-paper')
 
 
+def _set_fig_size(width: float, height: float, ncols: int, nrows: int, scale: str):
+    # original figure width & height before scaling
+    fig_width = width * ncols
+    fig_height = height * nrows
+
+    if scale == "auto":
+        scale = min(1.0, 10.0 / fig_width)  # width of figure cannot exceede 10 inches
+        scale = min(
+            scale, 10.0 / fig_height
+        )  # height of figure cannot exceede 10.0 inches
+
+    figsize = (scale * fig_width, scale * fig_height)
+
+    return figsize
+
 def init_plot(
     title: str,
     xlabel: str,
@@ -51,17 +66,7 @@ def init_subplot(
     sharey: bool = True,
     grid: bool = False,
 ):
-    # original figure width & height before scaling
-    fig_width = width * ncols
-    fig_height = height * nrows
-
-    if scale == "auto":
-        scale = min(1.0, 10.0 / fig_width)  # width of figure cannot exceede 10 inches
-        scale = min(
-            scale, 10.0 / fig_height
-        )  # height of figure cannot exceede 10.0 inches
-
-    figsize = (scale * fig_width, scale * fig_height)
+    figsize = _set_fig_size(width, height, ncols, nrows, scale)
     fig, axs = plt.subplots(nrows, ncols, figsize=figsize, sharex=sharex, sharey=sharey)
 
     for ax in axs.flat:
@@ -73,6 +78,40 @@ def init_subplot(
     fig.tight_layout()  # adjust the padding between and around subplots to neaten things up
 
     return fig, axs
+
+
+def init_multiplot(
+        nrows: int,
+        ncols: int,
+        panels: list[tuple[str, str]],
+        title: str,
+        width: float = 6,
+        height: float = 4,
+        scale: str = "auto",
+        grid: bool = False
+):
+    figsize = _set_fig_size(width, height, ncols, nrows, scale)
+    fig = plt.figure(figsize=figsize)
+    grid = fig.add_gridspec(nrows, ncols)
+
+    panel_axs = []
+    for panel in panels:
+        if panel[0] == 'all' and panel[1] != 'all':
+            panel_axs.append(fig.add_subplot(grid[:, eval(panel[1])]))
+        elif panel[1] == 'all' and panel[0] != 'all':
+            panel_axs.append(fig.add_subplot(grid[eval(panel[0]), :]))
+        elif panel[0] == 'all' and panel[1] == 'all':
+            panel_axs.append(fig.add_subplot(grid[:, :]))
+        else:
+            panel_axs.append(fig.add_subplot(grid[eval(panel[0]), eval(panel[1])]))
+
+    for ax in panel_axs:
+        ax.grid(grid)  # maybe add grid lines
+
+    fig.suptitle(title)
+    fig.tight_layout()  # adjust the padding between and around subplots to neaten things up
+
+    return fig, panel_axs
 
 
 def save_fig(

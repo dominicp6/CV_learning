@@ -9,3 +9,7 @@ autograd~=1.3
 pyemma~=2.5.12
 dill~=0.3.5.1
 pandas~=1.4.4
+networkx~=2.8.4
+deeptime~=0.4.3
+seaborn~=0.12.0
+psutil~=5.9.0

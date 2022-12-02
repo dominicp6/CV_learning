@@ -13,6 +13,7 @@ import glob
 import json
 import copy
 import math
+import psutil
 from time import time
 from typing import Union, Optional
 
@@ -26,6 +27,7 @@ import deeptime
 import numpy as np
 import matplotlib.pyplot as plt
 import sklearn
+import openmm.unit as unit
 from deeptime.util.validation import implied_timescales
 from deeptime.plots import plot_implied_timescales
 from deeptime.clustering import KMeans
@@ -38,10 +40,13 @@ from KramersRateEvaluator import KramersRateEvaluator
 from Dihedrals import Dihedrals
 from analine_free_energy import compute_dihedral_trajectory
 from utils.diffusion_utils import free_energy_estimate_2D
-#import pydiffmap.diffusion_map as dfm
+# import pydiffmap.diffusion_map as dfm
 import mdfeature.features as feat
-from utils.openmm_utils import parse_quantity
-from utils.plotting_functions import init_plot, init_subplot, save_fig
+from utils.msm_utils import msm_clustering, msm_discrete_traj, msm_transition_counts, maximum_likelihood_msm, \
+    plot_transition_graph
+from utils.openmm_utils import parse_quantity, time_to_iteration_conversion
+from utils.plotting_functions import init_plot, init_multiplot, save_fig
+
 
 # TODO: think what is happening to water molecules in the trajectory
 #
@@ -72,7 +77,9 @@ def supress_stdout(func):
         with open(os.devnull, 'w') as devnull:
             with contextlib.redirect_stdout(devnull):
                 return func(*a, **ka)
+
     return wrapper
+
 
 def remove_nans(data: np.array, axis: int = 1) -> np.array:
     num_nans = np.count_nonzero(np.isnan(data))
@@ -84,25 +91,69 @@ def remove_nans(data: np.array, axis: int = 1) -> np.array:
     return data
 
 
+def select_file_option(options: list, file_type: str) -> int:
+    if len(options) > 1:
+        print(f"{len(options)} {file_type} files found in the given directory:")
+        for idx, file in enumerate(options):
+            print(f"[{idx + 1}] {file}")
+        while True:
+            selection = input(f"Which {file_type} file do you want to use? ")
+            valid_selections = [str(idx + 1) for idx in range(len(options))]
+            if selection not in valid_selections:
+                print(f"Input not recognised; must be one of {valid_selections}")
+            else:
+                break
+    else:
+        selection = '1'
+
+    return int(selection) - 1  # -1 to allow for correct indexing
+
+
+def check_if_memory_available(file):
+    """
+    Checks if the system has available memory for loading the requested file.
+    """
+    file_stat = os.stat(file)
+    file_size = file_stat.st_size
+    available_memory = psutil.virtual_memory()[1]
+    if file_size > 0.9 * available_memory:
+        raise MemoryError(f"Loading the file {file} would use more than 90% of "
+                          f"the available memory ({round(file_size / 10 ** 9, 1)}/{round(available_memory / 10 ** 9, 1)}Gb).")
+    else:
+        pass
+
+
 def load_pdb(loc: str) -> md.Trajectory:
     pdb_files = glob.glob(os.path.join(loc, "*.pdb"))
-    # TODO: fix it to work with multiple pdb files w/ and w/o water
-    assert (
-        len(pdb_files) <= 1
-    ), f"Read error: more than one PDB file found in the directory ({pdb_files})."
     assert len(pdb_files) != 0, f"Read error: no PDB files found in directory."
-    return md.load_pdb(pdb_files[0])
+    selection = select_file_option(pdb_files, 'PDB')
+    selected_pdb = pdb_files[selection]
+    check_if_memory_available(selected_pdb)
+
+    return md.load_pdb(selected_pdb)
 
 
 def load_trajectory(
-    loc: str, topology: Union[str, md.Trajectory, md.Topology]
+        loc: str, topology: Union[str, md.Trajectory, md.Topology]
 ) -> md.Trajectory:
     traj_files = glob.glob(os.path.join(loc, "*.dcd"))
-    assert (
-        len(traj_files) <= 1
-    ), f"Read error: more than one traj file found in the directory ({traj_files})."
     assert len(traj_files) != 0, f"Read error: no traj files found in directory."
-    return mdtraj.load(traj_files[0], top=topology)
+    selection = select_file_option(traj_files, 'traj')
+    selected_traj = traj_files[selection]
+    check_if_memory_available(selected_traj)
+
+    return mdtraj.load(selected_traj, top=topology)
+
+
+def get_metadata_file(
+        loc: str, keyword: str
+):
+    metadata_files = glob.glob(os.path.join(loc, f"*{keyword}*.json"))
+    assert len(metadata_files) != 0, f"Read error: no metadata files found in directory."
+    selection = select_file_option(metadata_files, "metadata")
+    selected_metadata = metadata_files[selection]
+
+    return selected_metadata
 
 
 def compute_dihedral_traj(loc: str, dihedrals: list[list]) -> list:
@@ -122,9 +173,10 @@ def load_dihedral_trajectory(loc: str, dihedral_pickle_file: str) -> list:
     dihedral_traj[:, [0, 1]] = dihedral_traj[:, [1, 0]]
     return dihedral_traj
 
+
 # TODO: possibly replace with mdtraj featurizer
 def initialise_featurizer(
-    dihedral_features: Union[dict, str], topology
+        dihedral_features: Union[dict, str], topology
 ) -> pyemma.coordinates.featurizer:
     featurizer = pyemma.coordinates.featurizer(topology)
     # If features listed explicitly, add them
@@ -173,11 +225,10 @@ def get_feature_ids_from_names(
 
 
 def get_feature_trajs_from_names(
-    feature_names: list[str],
-    featurized_traj: np.array,
-    featurizer: pyemma.coordinates.featurizer,
+        feature_names: list[str],
+        featurized_traj: np.array,
+        featurizer: pyemma.coordinates.featurizer,
 ) -> np.array:
-
     feature_ids = get_feature_ids_from_names(feature_names, featurizer)
 
     feature_trajs = []
@@ -200,203 +251,28 @@ def write_metadynamics_line(height: float, pace: int, CV: str, file):
     arg_list.append(f"{CV}_%d" % 0)
     sigma_list.append(str(0.1))
     output = (
-        "METAD ARG=%s SIGMA=%s HEIGHT=%s FILE=HILLS PACE=%s LABEL=metad"
-        % (",".join(arg_list), ",".join(sigma_list), str(height), str(pace))
-        + " \\n\\"
+            "METAD ARG=%s SIGMA=%s HEIGHT=%s FILE=HILLS PACE=%s LABEL=metad"
+            % (",".join(arg_list), ",".join(sigma_list), str(height), str(pace))
+            + " \\n\\"
     )
     print(output)
     file.writelines(output + "\n")
     output = (
-        "PRINT ARG=%s,metad.bias STRIDE=%s FILE=COLVAR"
-        % (",".join(arg_list), str(pace))
-        + " \\n"
+            "PRINT ARG=%s,metad.bias STRIDE=%s FILE=COLVAR"
+            % (",".join(arg_list), str(pace))
+            + " \\n"
     )
     print(output + '"')
     file.writelines(output + '"' + "\n")
     file.close()
 
 
-def round_format_unit(unit, significant_figures: int):
-    return f'{round(unit._value,significant_figures)} {unit.unit.get_symbol()}'
-
-
-def my_draw_networkx_edge_labels(
-    G,
-    pos,
-    edge_labels=None,
-    label_pos=0.5,
-    font_size=10,
-    font_color="k",
-    font_family="sans-serif",
-    font_weight="normal",
-    alpha=None,
-    bbox=None,
-    horizontalalignment="center",
-    verticalalignment="center",
-    ax=None,
-    rotate=True,
-    clip_on=True,
-    rad=0
-):
-    """Draw edge labels.
-
-    Parameters
-    ----------
-    G : graph
-        A networkx graph
-
-    pos : dictionary
-        A dictionary with nodes as keys and positions as values.
-        Positions should be sequences of length 2.
-
-    edge_labels : dictionary (default={})
-        Edge labels in a dictionary of labels keyed by edge two-tuple.
-        Only labels for the keys in the dictionary are drawn.
-
-    label_pos : float (default=0.5)
-        Position of edge label along edge (0=head, 0.5=center, 1=tail)
-
-    font_size : int (default=10)
-        Font size for text labels
-
-    font_color : string (default='k' black)
-        Font color string
-
-    font_weight : string (default='normal')
-        Font weight
-
-    font_family : string (default='sans-serif')
-        Font family
-
-    alpha : float or None (default=None)
-        The text transparency
-
-    bbox : Matplotlib bbox, optional
-        Specify text box properties (e.g. shape, color etc.) for edge labels.
-        Default is {boxstyle='round', ec=(1.0, 1.0, 1.0), fc=(1.0, 1.0, 1.0)}.
-
-    horizontalalignment : string (default='center')
-        Horizontal alignment {'center', 'right', 'left'}
-
-    verticalalignment : string (default='center')
-        Vertical alignment {'center', 'top', 'bottom', 'baseline', 'center_baseline'}
-
-    ax : Matplotlib Axes object, optional
-        Draw the graph in the specified Matplotlib axes.
-
-    rotate : bool (deafult=True)
-        Rotate edge labels to lie parallel to edges
-
-    clip_on : bool (default=True)
-        Turn on clipping of edge labels at axis boundaries
-
-    Returns
-    -------
-    dict
-        `dict` of labels keyed by edge
-
-    Examples
-    --------
-    >>> G = nx.dodecahedral_graph()
-    >>> edge_labels = nx.draw_networkx_edge_labels(G, pos=nx.spring_layout(G))
-
-    Also see the NetworkX drawing examples at
-    https://networkx.org/documentation/latest/auto_examples/index.html
-
-    See Also
-    --------
-    draw
-    draw_networkx
-    draw_networkx_nodes
-    draw_networkx_edges
-    draw_networkx_labels
-    """
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    if ax is None:
-        ax = plt.gca()
-    if edge_labels is None:
-        labels = {(u, v): d for u, v, d in G.edges(data=True)}
-    else:
-        labels = edge_labels
-    text_items = {}
-    for (n1, n2), label in labels.items():
-        (x1, y1) = pos[n1]
-        (x2, y2) = pos[n2]
-        (x, y) = (
-            x1 * label_pos + x2 * (1.0 - label_pos),
-            y1 * label_pos + y2 * (1.0 - label_pos),
-        )
-        pos_1 = ax.transData.transform(np.array(pos[n1]))
-        pos_2 = ax.transData.transform(np.array(pos[n2]))
-        linear_mid = 0.5*pos_1 + 0.5*pos_2
-        d_pos = pos_2 - pos_1
-        rotation_matrix = np.array([(0,1), (-1,0)])
-        ctrl_1 = linear_mid + rad*rotation_matrix@d_pos
-        ctrl_mid_1 = 0.5*pos_1 + 0.5*ctrl_1
-        ctrl_mid_2 = 0.5*pos_2 + 0.5*ctrl_1
-        bezier_mid = 0.5*ctrl_mid_1 + 0.5*ctrl_mid_2
-        (x, y) = ax.transData.inverted().transform(bezier_mid)
-
-        if rotate:
-            # in degrees
-            angle = np.arctan2(y2 - y1, x2 - x1) / (2.0 * np.pi) * 360
-            # make label orientation "right-side-up"
-            if angle > 90:
-                angle -= 180
-            if angle < -90:
-                angle += 180
-            # transform data coordinate angle to screen coordinate angle
-            xy = np.array((x, y))
-            trans_angle = ax.transData.transform_angles(
-                np.array((angle,)), xy.reshape((1, 2))
-            )[0]
-        else:
-            trans_angle = 0.0
-        # use default box of white with white border
-        if bbox is None:
-            bbox = dict(boxstyle="round", ec=(1.0, 1.0, 1.0), fc=(1.0, 1.0, 1.0))
-        if not isinstance(label, str):
-            label = str(label)  # this makes "1" and 1 labeled the same
-
-        t = ax.text(
-            x,
-            y,
-            label,
-            size=font_size,
-            color=font_color,
-            family=font_family,
-            weight=font_weight,
-            alpha=alpha,
-            horizontalalignment=horizontalalignment,
-            verticalalignment=verticalalignment,
-            rotation=trans_angle,
-            transform=ax.transData,
-            bbox=bbox,
-            zorder=1,
-            clip_on=clip_on,
-        )
-        text_items[(n1, n2)] = t
-
-    ax.tick_params(
-        axis="both",
-        which="both",
-        bottom=False,
-        left=False,
-        labelbottom=False,
-        labelleft=False,
-    )
-
-    return text_items
-
-
 class Experiment:
     def __init__(
-        self,
-        location: str,
-        features: Optional[Union[dict, str]] = None,
-        metad_bias_file=None,
+            self,
+            location: str,
+            features: Optional[Union[dict, str]] = None,
+            metad_bias_file=None,
     ):
         # ================== DEFAULTS =====================
         self.DM_DEFAULTS = {
@@ -457,18 +333,21 @@ class Experiment:
         self.kre = KramersRateEvaluator()
         self.discrete_traj = None
 
+    def get_features(self):
+        return self.featurizer.describe()
+
     def get_trajectory(self):
         return self.featurized_traj if self.features_provided else self.traj.xyz
 
     def free_energy_plot(
-        self,
-        features: list[str],
-        feature_nicknames: Optional[list[str]] = None,
-        nan_threshold: int = 50,
-        save_name="free_energy_plot",
-        data_fraction: float = 1.0,
-        bins: int = 100,
-        landmark_points: Optional[dict[str, tuple[float, float]]] = None,
+            self,
+            features: list[str],
+            feature_nicknames: Optional[list[str]] = None,
+            nan_threshold: int = 50,
+            save_name="free_energy_plot",
+            data_fraction: float = 1.0,
+            bins: int = 100,
+            landmark_points: Optional[dict[str, tuple[float, float]]] = None,
     ) -> None:
         feature_nicknames = self._check_fes_arguments(features, feature_nicknames)
         fig, ax = init_plot(
@@ -499,73 +378,29 @@ class Experiment:
 
         return
 
-    def markov_state_model(self, n_clusters: int, lagtime: str, features: list[str], feature_nicknames: Optional[list[str]] = None):
+    def markov_state_model(self, n_clusters: int, lagtime: str, features: list[str],
+                           feature_nicknames: Optional[list[str]] = None):
+        assert isinstance(lagtime, str), "Lagtime must be a string (e.g. `10ns')."
         samples = self.get_trajectory()
         lagtime = parse_quantity(lagtime)
-        lagstep = math.floor(lagtime/self.savefreq)
+        lagstep = math.floor(lagtime / self.savefreq)
         if lagstep < 1:
-            raise ValueError(f"Lagtime provided ({lagtime}) is less than the saving interval of the trajectory ({self.savefreq}).")
+            raise ValueError(
+                f"Lagtime provided ({lagtime}) is less than the saving interval of the trajectory ({self.savefreq}).")
         else:
             print(f"Lagtime {lagtime} corresponds to a lag step of {lagstep}.")
 
-
         # Clustering
         # TODO: make clustering work for sin, cos features
-        print("Clustering")
-        estimator = KMeans(n_clusters=n_clusters, init_strategy='kmeans++', fixed_seed=13, n_jobs=os.cpu_count()-1, progress=tqdm)
-        clustering = estimator.fit(samples).fetch_model()
-        fig, ax = init_plot("Inertia of KMeans Training", "iteration", "inertia", xscale="log")
-        """
-        Inertia measures how well a dataset was clustered by K-Means. It is calculated by measuring the distance 
-        between each data point and its centroid, squaring this distance, and summing these squares across one cluster.
-        """
-        ax.plot(clustering.inertias)
-        plt.show()
 
-        # Discrete trajectory
-        print("Getting discrete trajectory")
-        discrete_traj = clustering.transform(samples)
-        print("Cluster centres", clustering.cluster_centers)
-        # Transition count model
-        print("Computing transition count model")
-        estimator = TransitionCountEstimator(lagtime=lagstep, count_mode="sliding")
-        counts = estimator.fit(discrete_traj).fetch_model()
-        print("Weakly connected sets:", counts.connected_sets(directed=False))
-        print("Strongly connected sets:", counts.connected_sets(directed=True))
-
-        # MSM
-        print("Computing MSM")
-        estimator = MaximumLikelihoodMSM(reversible=True, stationary_distribution_constraint=None)
-        msm = estimator.fit(counts).fetch_model()
-
-        # - plot timescales
+        clustering = msm_clustering(samples, n_clusters)
+        discrete_traj = msm_discrete_traj(clustering, samples)
+        counts = msm_transition_counts(discrete_traj, lagstep)
+        msm = maximum_likelihood_msm(counts)
         fix, ax = init_plot("MSM State Timescales", "state", f"timescale (x{self.savefreq})")
         ax.plot(msm.timescales())
         plt.show()
-
-        # - plot transition matrix with connectivity threshold
-        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
-        threshold = 1e-2
-        title = f"Transition matrix with connectivity threshold {threshold:.0e}"
-        G = nx.DiGraph()
-        ax.set_title(title)
-        edge_labels = {}
-        for i in range(msm.n_states):
-            G.add_node(i, title=f"{i + 1}")
-        for i in range(msm.n_states):
-            for j in range(msm.n_states):
-                if msm.transition_matrix[i, j] > threshold:
-                    transition_time = mfpt(msm.transition_matrix, target=j, origin=i, tau=lagstep)
-                    G.add_edge(i, j)
-                    edge_labels[(i, j)] = f"{msm.transition_matrix[i, j]:.3e} ({round_format_unit(transition_time * self.savefreq, 3)})"
-
-        #edge_labels = nx.get_edge_attributes(G, 'title')
-        pos = nx.fruchterman_reingold_layout(G)
-        nx.draw_networkx_nodes(G, pos, ax=ax)
-        nx.draw_networkx_labels(G, pos, ax=ax, labels=nx.get_node_attributes(G, 'title'))
-        nx.draw_networkx_edges(G, pos, ax=ax, arrowstyle='-|>',
-                               connectionstyle='arc3, rad=0.3')
-        my_draw_networkx_edge_labels(G, pos, ax=ax, edge_labels=edge_labels, rotate=False, rad=0.25)
+        plot_transition_graph(msm, lagstep, self.savefreq)
 
         print(clustering.cluster_centers)
         feature_ids = get_feature_ids_from_names(features, self.featurizer)
@@ -573,31 +408,33 @@ class Experiment:
         print(feature_ids)
         landmark_points = {}
         for i in range(msm.n_states):
-            landmark_points[str(i+1)] = tuple(clustering.cluster_centers[i, feature_ids])
+            landmark_points[str(i + 1)] = tuple(clustering.cluster_centers[i, feature_ids])
 
         self.free_energy_plot(features, feature_nicknames, landmark_points=landmark_points)
 
-
-
     # TODO: add PCCA+ function for "coarse graining" the MSM
-    def contact_graphs(self):
-        fig, ax = init_subplot(nrows=2, ncols=4, title='Contact Plot Analysis', xlabel='time (ns)', ylabel='')
-        # three contact maps at start, middle and end of trajectory
-        # TODO: fix, maybe only find subset of contacts?
-        ax[0, 0] = plt.imshow(mdtraj.geometry.squareform(**mdtraj.compute_contacts(self.traj[0])))
-        ax[0, 1] = plt.imshow(mdtraj.geometry.squareform(**mdtraj.compute_contacts(self.traj[0])))
-        ax[0, 2] = plt.imshow(mdtraj.geometry.squareform(**mdtraj.compute_contacts(self.traj[0])))
+    def contact_analysis(self, contact_threshold: float = 2.0, times: list[str] = None):
+        duration_ns = self.duration.in_units_of(unit.nanoseconds)._value
 
-        distances, pairs = mdtraj.compute_contacts(self.traj)
-        threshold = 2
-        number_of_close_contacts = np.sum((distances < threshold), axis=1)  # sum along the columns (contacts)
-        # TODO: add labelling
-        # plot of number of contacts in the trajectory as a function of time
-        ax[1, :] = plt.plot(number_of_close_contacts)
+        if times is not None:
+            assert len(times) == 3, "Three time snapshots must be provided for contact analysis."
+            frames = [time_to_iteration_conversion(t, self.duration, self.num_frames) for t in times]
+        else:
+            times = ['0.0ns', f'{duration_ns / 2}ns', f'{duration_ns}ns']
+            frames = [0, int(len(self.traj) / 2), -1]
+        fig, axs = init_multiplot(nrows=3, ncols=3, title='Contact Analysis', panels=[('0', '0'), ('0', '1'),
+                                                                                      ('0', '2'), ('1', 'all'),
+                                                                                      ('2', 'all')])
 
+        self._plot_contact_matrices(fig, axs, frames, times)
+        self._plot_contacts_over_time(axs, contact_threshold, times, duration_ns)
         plt.show()
 
-    def implied_timescale_analysis(self, max_lag: int = 10, increment: int = 1):
+    def implied_timescale_analysis(self, max_lag: int = 10, increment: int = 1, yscale: str = 'log'):
+        """
+        Illustrates how TICA implied timescales vary as the lagtime varies.
+        For more details on this approach, consult http://docs.markovmodel.org/lecture_implied_timescales.html.
+        """
         lagtimes = np.arange(1, max_lag, increment)
         # save current TICA obj
         TICA_obj = copy.deepcopy(self.CVs['TICA'])
@@ -607,11 +444,12 @@ class Experiment:
             models.append(self.CVs['TICA'])
         self.CVs['TICA'] = TICA_obj
         its_data = implied_timescales(models)
-        fig, ax = init_plot('Implied timescales (TICA)', 'lag time (steps)', 'timescale (steps)', yscale='log')
+        fig, ax = init_plot('Implied timescales (TICA)', 'lag time (steps)', 'timescale (steps)', yscale=yscale)
         plot_implied_timescales(its_data, n_its=2, ax=ax)
+        plt.annotate(f"NB: One step corresponds to a time of {self.savefreq}", xy=(90, 1), xycoords='figure points')
         plt.show()
 
-    def compute_cv(self, CV: str, dim: Optional[int]=None, stride: int = 1, **kwargs):
+    def compute_cv(self, CV: str, dim: Optional[int] = None, stride: int = 1, **kwargs):
         """
 
         :param CV:
@@ -653,7 +491,7 @@ class Experiment:
         print(f"Computed CV in {round(t1 - t0, 3)}s.")
 
     def analyse_kramers_rate(
-        self, CV: str, dimension: int, lag: int, sigmaD: float, sigmaF: float
+            self, CV: str, dimension: int, lag: int, sigmaD: float, sigmaF: float
     ):
         self.kre.fit(
             self._get_cv(CV, dimension),
@@ -695,11 +533,11 @@ class Experiment:
         return coeffs[1:]
 
     def create_plumed_metadynamics_script(
-        self,
-        CV: str,
-        filename: str = None,
-        gaussian_height: float = 0.2,
-        gaussian_pace: int = 1000,
+            self,
+            CV: str,
+            filename: str = None,
+            gaussian_height: float = 0.2,
+            gaussian_pace: int = 1000,
     ):
         if not self.features_provided:
             raise ValueError(
@@ -726,11 +564,12 @@ class Experiment:
 
     # ====================== INIT HELPERS =================================
     @staticmethod
-    def _init_metadata(location: str, metadata_file="metadata.json"):
+    def _init_metadata(location: str, keyword="metadata"):
         """
         Reads experiment metadata from file
         """
-        with open(os.path.join(location, metadata_file)) as metadata_f:
+        metadata_file = get_metadata_file(location, keyword)
+        with open(os.path.join(metadata_file)) as metadata_f:
             metadata = json.load(metadata_f)
         values = {}
         for key in ["temperature", "duration", "savefreq", "stepsize"]:
@@ -829,7 +668,7 @@ class Experiment:
     def _load_metad_bias(self, bias_file: str, col_idx: int = 2) -> (list, list):
         colvar = np.genfromtxt(bias_file, delimiter=" ")
         assert (
-            col_idx < colvar.shape[1]
+                col_idx < colvar.shape[1]
         ), "col_idx must not exceed 1 less than the number of columns in the bias file"
         bias_potential_traj = colvar[:, col_idx]  # [::500][:-1]
         weights = np.exp(self.beta * bias_potential_traj)
@@ -837,9 +676,9 @@ class Experiment:
 
     # ====================== OTHER HELPERS =================================
     def _check_fes_arguments(
-        self,
-        features: list[str],
-        feature_nicknames: Optional[list[str]],
+            self,
+            features: list[str],
+            feature_nicknames: Optional[list[str]],
     ) -> (list[str], str):
         # Check that the experiment is featurized
         if not self.features_provided:
@@ -851,7 +690,7 @@ class Experiment:
         # Check that the required features exist
         for feature in features:
             assert (
-                feature in self.featurizer.describe()
+                    feature in self.featurizer.describe()
             ), f"Feature '{feature}' not found in available features ({self.featurizer.describe()})"
 
         # Automatically set feature nicknames if they are not provided
@@ -893,3 +732,34 @@ class Experiment:
         ax.tricontour(x, y, free_energy, levels=levels, linewidths=0.5, colors="k")
 
         return ax, im
+
+    def _plot_contact_matrices(self, fig, axs, frames: list[int], times: list[str]):
+        contact_data = [mdtraj.compute_contacts(self.traj[frame]) for frame in frames]
+        min_dist = 0
+        max_dist = np.max(np.hstack((contact_data[0][0], contact_data[1][0], contact_data[2][0])))
+        cbar_x_axis_pos = [0.275, 0.602, 0.93]
+        for idx, cbar_pos in enumerate(cbar_x_axis_pos):
+            im = axs[idx].imshow(mdtraj.geometry.squareform(contact_data[idx][0], contact_data[idx][1])[0],
+                                 vmin=min_dist, vmax=max_dist)
+            axs[idx].set_title(f'time = {times[idx]}')
+            axs[idx].set_xlabel('Res Number')
+            axs[idx].set_ylabel('Res Number')
+            cbar_ax = fig.add_axes([cbar_pos, 0.66, 0.02, 0.25])
+            fig.colorbar(im, cax=cbar_ax)
+
+    def _plot_contacts_over_time(self, axs, contact_threshold: float, times: list[str], duration_ns: float):
+        distances, pairs = mdtraj.compute_contacts(self.traj)
+        number_of_close_contacts = np.sum((distances < contact_threshold), axis=1)  # sum along the columns (contacts)
+        rms_dist = np.sqrt(np.mean(distances ** 2, axis=1))
+
+        # plot of number of contacts in the trajectory as a function of time
+        x_var = np.arange(0, duration_ns, duration_ns / self.num_frames)
+        axs[3].plot(x_var, number_of_close_contacts, linewidth=0.5)
+        [axs[3].axvline(x=parse_quantity(t)._value, color='r') for t in times]
+        axs[3].set_xlabel('time (ns)')
+        axs[3].set_ylabel(f'#contacts < {contact_threshold} $nm$')
+
+        axs[4].plot(x_var, rms_dist, linewidth=0.5)
+        [axs[4].axvline(x=parse_quantity(t)._value, color='r') for t in times]
+        axs[4].set_xlabel('time (ns)')
+        axs[4].set_ylabel(f'RMSD Res-Res ($nm$)')

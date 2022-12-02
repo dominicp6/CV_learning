@@ -126,6 +126,16 @@ def parse_quantity(s: str):
         raise ValueError(f"Invalid quantity: {s}")
 
 
+def round_format_unit(unit, significant_figures: int):
+    return f'{round(unit._value, significant_figures)} {unit.unit.get_symbol()}'
+
+
+def time_to_iteration_conversion(time: str, duration: unit.Unit, num_frames: int):
+    time = parse_quantity(time)
+    iteration = int(time / duration * num_frames)
+    return iteration
+
+
 class OpenMMSimulation:
 
     def __init__(self):
