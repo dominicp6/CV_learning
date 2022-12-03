@@ -126,7 +126,7 @@ def parse_quantity(s: str):
         raise ValueError(f"Invalid quantity: {s}")
 
 
-def round_format_unit(unit, significant_figures: int):
+def round_format_unit(unit: unit.Unit, significant_figures: int):
     return f'{round(unit._value, significant_figures)} {unit.unit.get_symbol()}'
 
 
