@@ -5,6 +5,9 @@
    Author: Dominic Phillips (dominicp6)
 """
 
+import os
+import contextlib
+import psutil
 from typing import Optional, Callable
 
 import numpy as np
@@ -13,12 +16,70 @@ import scipy.interpolate as interpolate
 from scipy.ndimage import gaussian_filter1d
 
 
+def assert_kwarg(kwargs: dict, kwarg: str, obj_name: str):
+    try:
+        assert kwargs[kwarg] is not None
+    except Exception:
+        raise ValueError(f"{kwarg} must be provided to {obj_name}")
+
+
+def supress_stdout(func):
+    def wrapper(*a, **ka):
+        with open(os.devnull, 'w') as devnull:
+            with contextlib.redirect_stdout(devnull):
+                return func(*a, **ka)
+
+    return wrapper
+
+
+def select_file_option(options: list, file_type: str) -> int:
+    if len(options) > 1:
+        print(f"{len(options)} {file_type} files found in the given directory:")
+        for idx, file in enumerate(options):
+            print(f"[{idx + 1}] {file}")
+        while True:
+            selection = input(f"Which {file_type} file do you want to use? ")
+            valid_selections = [str(idx + 1) for idx in range(len(options))]
+            if selection not in valid_selections:
+                print(f"Input not recognised; must be one of {valid_selections}")
+            else:
+                break
+    else:
+        selection = '1'
+
+    return int(selection) - 1  # -1 to allow for correct indexing
+
+
+def check_if_memory_available(file):
+    """
+    Checks if the system has available memory for loading the requested file.
+    """
+    file_stat = os.stat(file)
+    file_size = file_stat.st_size
+    available_memory = psutil.virtual_memory()[1]
+    if file_size > 0.9 * available_memory:
+        raise MemoryError(f"Loading the file {file} would use more than 90% of "
+                          f"the available memory ({round(file_size / 10 ** 9, 1)}/{round(available_memory / 10 ** 9, 1)}Gb).")
+    else:
+        pass
+
+
 def replace_inf_with_nan(array: np.array) -> np.array:
     for idx, entry in enumerate(array):
         if entry == np.inf or entry == -np.inf:
             array[idx] = np.nan
 
     return array
+
+
+def remove_nans(data: np.array, axis: int = 1) -> np.array:
+    num_nans = np.count_nonzero(np.isnan(data))
+    if num_nans > 0:
+        axis_str = "rows" if axis == 1 else "columns"
+        print(f"{num_nans} NaNs detected, removing {axis_str} with NaNs.")
+        data = data[~np.isnan(data).any(axis=1), :]
+
+    return data
 
 
 def rms_interval(array: np.array) -> float:

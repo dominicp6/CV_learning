@@ -99,51 +99,25 @@ class KramersRateEvaluator:
         options: Optional[dict] = None,
     ) -> Union[RegularSpaceClustering, KmeansClustering]:
 
+        if cluster_type is not "kmeans":
+            raise NotImplemented("Only kmeans clustering implemented.")
+
         if options["dmin"] is None:
             options["dmin"] = min(
                 10 * self.msd_coordinate,
                 (max(self.coordinates) - min(self.coordinates)) / 10,
             )
 
-        # 1) Cluster the coordinate space into discrete states
-        if (
-            self.default_clustering is None
-            or self.number_of_default_clusters != options["k"]
-        ):
-            print(
-                f"Debug: default clustering {self.default_clustering}, num default clusters {self.number_of_default_clusters}, k {options['k']}"
-            )
-            cluster = utl.cluster_time_series(time_series, cluster_type, options)
-            self.default_clustering = cluster
-            self.number_of_default_clusters = len(cluster.clustercenters.flatten())
-        else:
-            print(f"Using default clustering provided.")
-            cluster = self.default_clustering
-
-        # 2) Compute the state trajectory
-        discrete_traj = cluster.dtrajs[0].copy()
-        cluster_centers = cluster.clustercenters.copy().flatten()
-        self.msm = MSM(state_centers=cluster_centers)
-        discrete_traj = self.msm.relabel_trajectory_by_coordinate_chronology(
-            traj=discrete_traj
-        )
-
+        msm = MSM(number_of_states=options['k'], lagtime=lag * time_step)
+        msm.fit(data=time_series, timestep=time_step)
         if self.verbose:
-            utl.lag_sensitivity_analysis(discrete_traj, cluster_centers, time_step)
+            utl.lag_sensitivity_analysis(msm.trajectory, msm.state_centres, msm.timestep)
 
-        # 3) Use the state trajectory to estimate a best-fitting MSM
-        msm = pyemma.msm.estimate_markov_model(dtrajs=discrete_traj, lag=lag)
-        self.msm.set_stationary_distribution(msm.stationary_distribution)
-        self.msm.set_transition_matrix(msm.transition_matrix)
-        self.msm.set_lag(lag)
-        self.msm.set_time_step(time_step)
-        self.msm.set_discrete_trajectory(discrete_traj)
-        self.diffusion_coefficients = self.msm.compute_diffusion_coefficient(
-            time_step, lag
-        )
-        self.msm.plot()
+        self.diffusion_coefficients = msm.compute_diffusion_coefficient()
+        msm.plot()
+        self.msm = msm
 
-        return cluster
+        return msm.clustering
 
     def _compute_kramers_rates(
         self,

@@ -5,12 +5,14 @@
 """
 
 import os
+import math
+from typing import Union
 
 import numpy as np
-import pyemma
 import matplotlib.pyplot as plt
 import numpy.typing as npt
 import networkx as nx
+import openmm.unit as unit
 from deeptime.markov import TransitionCountModel
 from deeptime.clustering import KMeans
 from deeptime.markov import TransitionCountEstimator
@@ -24,23 +26,20 @@ from utils.openmm_utils import round_format_unit
 from utils.plot_utils import my_draw_networkx_edge_labels
 
 
-# TODO: transition matrix only defined by specified tau value
-# need to add a check to make sure that the calculation of the
-# diffusion coefficient is consistent with the transition matrix
-# that is provided by the user
 class MSM:
-    def __init__(self, number_of_states: int, lagstep: int, verbose: bool = True,
+    def __init__(self, number_of_states: int, lagtime: Union[str, float], verbose: bool = True,
                  clustering_init_strategy: str = 'kmeans++', clustering_seed: int = 13,
                  transition_count_mode: str = 'sliding', reversible: bool = True):
         self.number_of_states = number_of_states  # number of discrete states
-        self.lagstep = lagstep
+        self.lagtime = parse_quantity(lagtime)
 
         self.timestep = None  # the timestep between frames of the data
-        self.lagtime = None  # lagstep * timestep
+        self.lagstep = None  # lagtime / timestep
         self.dimension = None  # the dimension of the trajectory data used to train the MSM
         self.data = None  # the data used to train the MSM
 
         self.clustering = None
+        self.state_centres = None  # coordinates of the centres of the MSM states
         self.trajectory = None  # a discrete trajectory
         self.transition_counts = None
         self.transition_matrix = None
@@ -54,25 +53,27 @@ class MSM:
         self.transition_count_mode = transition_count_mode
         self.reversible = reversible
 
-    def fit(self, data: np.array, lagtime: str):
-        assert len(data.shape) < 3, "The data array must be either 1D or 2D"
+    def fit(self, data: np.array, timestep: unit.Unit):
+        assert len(data.shape) < 3, f"The data array must be either 1D or 2D but got shape {data.shape}"
         self.dimension = np.shape(data)[1] if len(data.shape) == 2 else 1
-        self.lagtime = parse_quantity(lagtime)
-        self.trajectory = self._cluster(data)
+        self.timestep = timestep
+        self.lagstep = math.floor(self.lagtime / self.timestep)
+        self.lagtime = self.lagstep * self.timestep
+        if self.lagstep < 1:
+            raise ValueError(
+                f"Lagtime provided ({self.lagtime}) is less than the timestep ({self.timestep}).")
+        if self.verbose:
+            print(f"Initiating MSM model with lagtime {self.lagtime} (lagstep {self.lagstep}).")
+        self.trajectory, self.state_centres = self._cluster(data)
         self.transition_counts = self._transition_counts(self.trajectory)
         self.msm = self._maximum_likelihood_msm(self.transition_counts)
         self.transition_matrix = self.msm.transition_matrix
         self.stationary_distribution = self.msm.stationary_distribution
 
-    def fetch(self):
-        return self.msm
-
-    def fit_fetch(self, data: np.array, lagtime: str) -> MarkovStateModelCollection:
-        self.fit(data, lagtime)
-        return self.fetch()
-
     def _cluster(self, data: np.array) -> np.array:
-        estimator = KMeans(n_clusters=self.number_of_states, init_strategy='kmeans++', fixed_seed=self.clustering_seed,
+        estimator = KMeans(n_clusters=self.number_of_states,
+                           init_strategy=self.clustering_init_strategy,
+                           fixed_seed=self.clustering_seed,
                            n_jobs=os.cpu_count() - 1,
                            progress=tqdm)
         self.clustering = estimator.fit(data).fetch_model()
@@ -80,8 +81,12 @@ class MSM:
             self.plot_inertia()
             print("Cluster centres", self.clustering.cluster_centers)
         trajectory = self.clustering.transform(data)
+        state_centres = self.clustering.cluster_centers
+        if self.dimension == 1:
+            trajectory = self.relabel_trajectory_by_coordinate_chronology(trajectory, state_centres)
+            state_centres = np.sort(self.state_centres)
 
-        return trajectory
+        return trajectory, state_centres
 
     def _transition_counts(self, trajectory) -> TransitionCountModel:
         estimator = TransitionCountEstimator(lagtime=self.lagstep, count_mode=self.transition_count_mode)
@@ -98,32 +103,81 @@ class MSM:
 
         return msm
 
+    # FUNCTIONS FOR 1D MSMs ############################################################
+    def compute_transition_rate(
+            self, starting_states: tuple[float, float], ending_states: tuple[float, float]
+    ):
+        assert self.dimension == 1, f"This function requires a 1D MSM and this is a {self.dimension}D MSM."
+        initial_states = self.compute_states_for_range(starting_states[0], starting_states[1])
+        final_states = self.compute_states_for_range(ending_states[0], starting_states[1])
+        transition_time = mfpt(self.msm.transition_matrix, tau=self.lagstep,
+                               origin=initial_states, target=final_states) * self.timestep
+
+        return 1 / transition_time
+
+    def compute_states_for_range(self, lower_value: float, upper_value: float) -> list[int]:
+        assert self.dimension == 1, f"This function requires a 1D MSM and this is a {self.dimension}D MSM."
+        state_boundaries = [(self.state_centres[i + 1] + self.state_centres[i]) / 2
+                            for i in range(len(self.state_centres) - 1)]
+        number_of_lower_states = len(
+            [boundary for boundary in state_boundaries if boundary < lower_value]
+        )
+        number_of_upper_states = len(
+            [boundary for boundary in state_boundaries if boundary > upper_value]
+        )
+
+        lower_state_index = number_of_lower_states
+        upper_state_index = self.number_of_states - number_of_upper_states
+
+        states_in_range = np.arange(lower_state_index, upper_state_index, 1)
+
+        return list(states_in_range)
+
     def calculate_correlation_coefficient(self, n: int):
+        assert self.dimension == 1, f"This function requires a 1D MSM and this is a {self.dimension}D MSM."
         assert self.transition_matrix is not None
         return np.sum(
             [
-                (self.sorted_state_centers - self.sorted_state_centers[j]) ** n
+                (self.state_centres - self.state_centres[j]) ** n
                 * self.transition_matrix[:, j]
                 for j in range(self.number_of_states)
             ],
             axis=0,
         )
 
-    # TODO: currently only works for 1D MSMs
-    def compute_transition_rate(
-            self, state_A: tuple[float, float], state_B: tuple[float, float]
-    ):
-        # Note lag must be the same as the lag used to define the Markov State Model
-        msm = pyemma.msm.estimate_markov_model(self.discrete_trajectory, lag=self.lag)
-        initial_states = self.compute_states_for_range(state_A[0], state_A[1])
-        final_states = self.compute_states_for_range(state_B[0], state_A[1])
-        mfpt = msm.mfpt(A=initial_states, B=final_states) * self.time_step
+    def compute_diffusion_coefficient_domain(self):
+        diffusion_coeff_domain = []
+        for idx in range(len(self.state_centres) - 1):
+            diffusion_coeff_domain.append(
+                (self.state_centres[idx + 1] + self.state_centres[idx])
+                / 2
+            )
 
-        return 1 / mfpt
+        return diffusion_coeff_domain
+
+    def compute_diffusion_coefficient(self):
+        tau = self.lagtime
+        c1 = self.calculate_correlation_coefficient(n=1)
+        c2 = self.calculate_correlation_coefficient(n=2)
+        # space-dependent diffusion coefficient
+        diffusion_coefficient = (c2 - c1 ** 2) / (2 * tau)
+
+        return diffusion_coefficient
+
+    def relabel_trajectory_by_coordinate_chronology(self, traj: npt.NDArray[np.int], state_centres: np.array):
+        assert self.dimension == 1, f"This function requires a 1D MSM and this is a {self.dimension}D MSM."
+        sorted_indices = np.argsort(np.argsort(state_centres))
+
+        # relabel states in trajectory
+        for idx, state in enumerate(traj):
+            traj[idx] = sorted_indices[traj[idx]]
+
+        return traj
+    ###################################################################################
 
     def plot(self):
         print(
-            f"MSM created with {self.number_of_states} states, using lag time {self.lag}."
+            f"MSM created with {self.number_of_states} states, using lag time {self.lagtime}."
         )
         plt.figure(figsize=(15, 5))
         plt.subplot(1, 2, 1)
@@ -141,7 +195,7 @@ class MSM:
 
     def plot_transition_graph(self, threshold_probability: float = 1e-2):
         fig, ax = init_plot(f"Transition matrix with connectivity threshold {threshold_probability:.0e}",
-                            figsize=(10, 10))
+                            figsize=(10, 10), xlabel=None, ylabel=None)
         msm_graph = nx.DiGraph()
         edge_labels = {}
         self._add_nodes(msm_graph)
@@ -162,7 +216,8 @@ class MSM:
         graph.add_edge(i, j)
         edge_labels[(i, j)] = f"{self.msm.transition_matrix[i, j]:.3e} ({transition_time})"
 
-    def _draw_graph(self, graph, ax, edge_labels):
+    @staticmethod
+    def _draw_graph(graph, ax, edge_labels):
         pos = nx.fruchterman_reingold_layout(graph)
         nx.draw_networkx_nodes(graph, pos, ax=ax)
         nx.draw_networkx_labels(graph, pos, ax=ax, labels=nx.get_node_attributes(graph, 'title'))
@@ -178,117 +233,8 @@ class MSM:
         ax.plot(self.clustering.inertias)
         plt.show()
 
-
-class MSM:
-    def __init__(self, state_centers: npt.NDArray[np.float64]):
-        self.state_centers = state_centers
-        self.number_of_states = len(state_centers)
-        self.sorted_state_centers = np.sort(state_centers)
-        self.stationary_distribution = None
-        self.transition_matrix = None
-        self.lag = None
-        self.time_step = None
-        self.discrete_trajectory = None
-
-    def compute_states_for_range(self, lower_value: float, upper_value: float) -> np.array:
-        state_boundaries = [
-            (self.sorted_state_centers[i + 1] + self.sorted_state_centers[i]) / 2
-            for i in range(len(self.sorted_state_centers) - 1)
-        ]
-        number_of_lower_states = len(
-            [boundary for boundary in state_boundaries if boundary < lower_value]
-        )
-        number_of_upper_states = len(
-            [boundary for boundary in state_boundaries if boundary > upper_value]
-        )
-
-        lower_state_index = number_of_lower_states
-        upper_state_index = self.number_of_states - number_of_upper_states
-
-        states_in_range = np.arange(lower_state_index, upper_state_index, 1)
-
-        return states_in_range
-
-    def compute_diffusion_coefficient_domain(self):
-        diffusion_coeff_domain = []
-        for idx in range(len(self.sorted_state_centers) - 1):
-            diffusion_coeff_domain.append(
-                (self.sorted_state_centers[idx + 1] + self.sorted_state_centers[idx])
-                / 2
-            )
-
-        return diffusion_coeff_domain
-
-    # def set_stationary_distribution(self, stationary_distribution: np.array):
-    #     self.stationary_distribution = stationary_distribution
-    #
-    # def set_transition_matrix(self, transition_matrix: np.array):
-    #     assert transition_matrix.shape[0] == len(self.sorted_state_centers)
-    #     self.transition_matrix = transition_matrix
-    #
-    # def set_lag(self, lag: int):
-    #     self.lag = lag
-    #
-    # def set_time_step(self, time_step: float):
-    #     self.time_step = time_step
-    #
-    # def set_discrete_trajectory(self, discrete_traj: npt.NDArray[np.int]):
-    #     self.discrete_trajectory = discrete_traj
-
-    # def calculate_correlation_coefficient(self, n: int):
-    #     assert self.transition_matrix is not None
-    #     return np.sum(
-    #         [
-    #             (self.sorted_state_centers - self.sorted_state_centers[j]) ** n
-    #             * self.transition_matrix[:, j]
-    #             for j in range(self.number_of_states)
-    #         ],
-    #         axis=0,
-    #     )
-
-    def relabel_trajectory_by_coordinate_chronology(self, traj: npt.NDArray[np.int]):
-        sorted_indices = np.argsort(np.argsort(self.state_centers))
-
-        # relabel states in trajectory
-        for idx, state in enumerate(traj):
-            traj[idx] = sorted_indices[traj[idx]]
-
-        return traj
-
-    # def compute_diffusion_coefficient(self, time_step: float, lag: int):
-    #     tau = lag * time_step
-    #     c1 = self.calculate_correlation_coefficient(n=1)
-    #     c2 = self.calculate_correlation_coefficient(n=2)
-    #     # space-dependent diffusion coefficient
-    #     diffusion_coefficient = (c2 - c1 ** 2) / (2 * tau)
-    #
-    #     return diffusion_coefficient
-
-    def plot(self):
-        print(
-            f"MSM created with {self.number_of_states} states, using lag time {self.lag}."
-        )
-        plt.figure(figsize=(15, 5))
-        plt.subplot(1, 2, 1)
-        plt.imshow(self.transition_matrix)
-        plt.xlabel("j", fontsize=16)
-        plt.ylabel("i", fontsize=16)
-        plt.title(r"MSM Transition Matrix $\mathbf{P}$", fontsize=16)
-        plt.colorbar()
-        plt.subplot(1, 2, 2)
-        plt.plot(self.stationary_distribution, color="k")
-        plt.xlabel("i", fontsize=16)
-        plt.ylabel(r"$\pi(i)$", fontsize=16)
-        plt.title(r"MSM Stationary Distribution $\mathbf{\pi}$", fontsize=16)
+    def plot_timescales(self):
+        # TODO: update y-axis to absolute value
+        fix, ax = init_plot("MSM State Timescales", "state", f"timescale (x{self.timestep})")
+        ax.plot(self.msm.timescales())
         plt.show()
-
-    def compute_transition_rate(
-            self, state_A: tuple[float, float], state_B: tuple[float, float]
-    ):
-        # Note lag must be the same as the lag used to define the Markov State Model
-        msm = pyemma.msm.estimate_markov_model(self.discrete_trajectory, lag=self.lag)
-        initial_states = self.compute_states_for_range(state_A[0], state_A[1])
-        final_states = self.compute_states_for_range(state_B[0], state_A[1])
-        mfpt = msm.mfpt(A=initial_states, B=final_states) * self.time_step
-
-        return 1 / mfpt

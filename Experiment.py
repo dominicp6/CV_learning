@@ -7,21 +7,14 @@
 
    Author: Dominic Phillips (dominicp6)
 """
-import contextlib
+
 import os
-import glob
 import json
 import copy
-import math
-import psutil
 from time import time
 from typing import Union, Optional
 
-import dill
-import mdtraj as md
-import mdtraj  # todo: remove
-import networkx as nx
-import pandas as pd
+import mdtraj
 import pyemma
 import deeptime
 import numpy as np
@@ -30,150 +23,21 @@ import sklearn
 import openmm.unit as unit
 from deeptime.util.validation import implied_timescales
 from deeptime.plots import plot_implied_timescales
-from deeptime.clustering import KMeans
-from deeptime.markov import TransitionCountEstimator
-from deeptime.markov.msm import MaximumLikelihoodMSM
-from deeptime.markov.tools.analysis import mfpt
 from tqdm import tqdm
 
 from KramersRateEvaluator import KramersRateEvaluator
+from MarkovStateModel import MSM
 from Dihedrals import Dihedrals
-from analine_free_energy import compute_dihedral_trajectory
 from utils.diffusion_utils import free_energy_estimate_2D
 # import pydiffmap.diffusion_map as dfm
 import mdfeature.features as feat
-from utils.msm_utils import msm_clustering, msm_discrete_traj, msm_transition_counts, maximum_likelihood_msm, \
-    plot_transition_graph
+from utils.experiment_utils import write_metadynamics_line, get_metadata_file, load_pdb, load_trajectory
+from utils.general_utils import supress_stdout, assert_kwarg, remove_nans
 from utils.openmm_utils import parse_quantity, time_to_iteration_conversion
 from utils.plotting_functions import init_plot, init_multiplot, save_fig
 
 
 # TODO: think what is happening to water molecules in the trajectory
-#
-# def subsample_trajectory(trajectory, stride):
-#     traj = md.Trajectory(trajectory.xyz[::stride], trajectory.topology)
-#     return traj.superpose(traj[0])
-#
-#
-# def ramachandran_from_x_y_z(x, y, z, rotate, levels=None):
-#     fig, ax = plt.subplots()
-#     if rotate is True:
-#         cntr2 = ax.tricontourf(y, x, z, levels=levels, cmap="RdBu_r")
-#         ax.tricontour(y, x, z, levels=levels, linewidths=0.5, colors='k')
-#     else:
-#         cntr2 = ax.tricontourf(x, y, z, levels=levels, cmap="RdBu_r")
-#         ax.tricontour(x, y, z, levels=levels, linewidths=0.5, colors='k')
-#     plt.xlabel(r'$\phi$')
-#     plt.ylabel(r'$\psi$')
-#     plt.gca().set_aspect('equal')
-#     cbar = fig.colorbar(cntr2, ax=ax)
-#     cbar.set_label(r'$\mathcal{F}(\phi,\psi)$ / kJmol$^{-1}$')
-#     ax.set(xlim=(-np.pi, np.pi), ylim=(-np.pi, np.pi))
-#     plt.xticks(np.arange(-3, 4, 1))
-#     plt.subplots_adjust(hspace=0.5)
-#
-def supress_stdout(func):
-    def wrapper(*a, **ka):
-        with open(os.devnull, 'w') as devnull:
-            with contextlib.redirect_stdout(devnull):
-                return func(*a, **ka)
-
-    return wrapper
-
-
-def remove_nans(data: np.array, axis: int = 1) -> np.array:
-    num_nans = np.count_nonzero(np.isnan(data))
-    if num_nans > 0:
-        axis_str = "rows" if axis == 1 else "columns"
-        print(f"{num_nans} NaNs detected, removing {axis_str} with NaNs.")
-        data = data[~np.isnan(data).any(axis=1), :]
-
-    return data
-
-
-def select_file_option(options: list, file_type: str) -> int:
-    if len(options) > 1:
-        print(f"{len(options)} {file_type} files found in the given directory:")
-        for idx, file in enumerate(options):
-            print(f"[{idx + 1}] {file}")
-        while True:
-            selection = input(f"Which {file_type} file do you want to use? ")
-            valid_selections = [str(idx + 1) for idx in range(len(options))]
-            if selection not in valid_selections:
-                print(f"Input not recognised; must be one of {valid_selections}")
-            else:
-                break
-    else:
-        selection = '1'
-
-    return int(selection) - 1  # -1 to allow for correct indexing
-
-
-def check_if_memory_available(file):
-    """
-    Checks if the system has available memory for loading the requested file.
-    """
-    file_stat = os.stat(file)
-    file_size = file_stat.st_size
-    available_memory = psutil.virtual_memory()[1]
-    if file_size > 0.9 * available_memory:
-        raise MemoryError(f"Loading the file {file} would use more than 90% of "
-                          f"the available memory ({round(file_size / 10 ** 9, 1)}/{round(available_memory / 10 ** 9, 1)}Gb).")
-    else:
-        pass
-
-
-def load_pdb(loc: str) -> md.Trajectory:
-    pdb_files = glob.glob(os.path.join(loc, "*.pdb"))
-    assert len(pdb_files) != 0, f"Read error: no PDB files found in directory."
-    selection = select_file_option(pdb_files, 'PDB')
-    selected_pdb = pdb_files[selection]
-    check_if_memory_available(selected_pdb)
-
-    return md.load_pdb(selected_pdb)
-
-
-def load_trajectory(
-        loc: str, topology: Union[str, md.Trajectory, md.Topology]
-) -> md.Trajectory:
-    traj_files = glob.glob(os.path.join(loc, "*.dcd"))
-    assert len(traj_files) != 0, f"Read error: no traj files found in directory."
-    selection = select_file_option(traj_files, 'traj')
-    selected_traj = traj_files[selection]
-    check_if_memory_available(selected_traj)
-
-    return mdtraj.load(selected_traj, top=topology)
-
-
-def get_metadata_file(
-        loc: str, keyword: str
-):
-    metadata_files = glob.glob(os.path.join(loc, f"*{keyword}*.json"))
-    assert len(metadata_files) != 0, f"Read error: no metadata files found in directory."
-    selection = select_file_option(metadata_files, "metadata")
-    selected_metadata = metadata_files[selection]
-
-    return selected_metadata
-
-
-def compute_dihedral_traj(loc: str, dihedrals: list[list]) -> list:
-    pdb = glob.glob(os.path.join(loc, "*.pdb"))[0]
-    traj = glob.glob(os.path.join(loc, "*.dcd"))[0]
-    dihedral_traj = np.array(compute_dihedral_trajectory(pdb, traj, dihedrals)).T
-    # correcting order
-    dihedral_traj[:, [0, 1]] = dihedral_traj[:, [1, 0]]
-    return dihedral_traj
-
-
-def load_dihedral_trajectory(loc: str, dihedral_pickle_file: str) -> list:
-    dihedral_traj = np.array(
-        dill.load(open(os.path.join(loc, dihedral_pickle_file), "rb"))
-    ).T
-    # correcting order
-    dihedral_traj[:, [0, 1]] = dihedral_traj[:, [1, 0]]
-    return dihedral_traj
-
-
 # TODO: possibly replace with mdtraj featurizer
 def initialise_featurizer(
         dihedral_features: Union[dict, str], topology
@@ -197,19 +61,6 @@ def initialise_featurizer(
         )
     featurizer.describe()
     return featurizer
-
-
-def flip_dihedral_coords(dihedral_traj):
-    temp = dihedral_traj[:, 0].copy()
-    dihedral_traj[:, 0] = dihedral_traj[:, 1]
-    dihedral_traj[:, 1] = temp
-
-
-def slice_array(data: np.array, quantity: int) -> Union[np.array, None]:
-    if data is None:
-        return None
-    else:
-        return data[:quantity]
 
 
 def get_feature_ids_from_names(
@@ -236,35 +87,6 @@ def get_feature_trajs_from_names(
         feature_trajs.append(featurized_traj[:, feature_id])
 
     return np.array(feature_trajs)
-
-
-def assert_kwarg(kwargs: dict, kwarg: str, CV: str):
-    try:
-        assert kwargs[kwarg] is not None
-    except Exception:
-        raise ValueError(f"{kwarg} must be provided to {CV}")
-
-
-def write_metadynamics_line(height: float, pace: int, CV: str, file):
-    arg_list = []
-    sigma_list = []
-    arg_list.append(f"{CV}_%d" % 0)
-    sigma_list.append(str(0.1))
-    output = (
-            "METAD ARG=%s SIGMA=%s HEIGHT=%s FILE=HILLS PACE=%s LABEL=metad"
-            % (",".join(arg_list), ",".join(sigma_list), str(height), str(pace))
-            + " \\n\\"
-    )
-    print(output)
-    file.writelines(output + "\n")
-    output = (
-            "PRINT ARG=%s,metad.bias STRIDE=%s FILE=COLVAR"
-            % (",".join(arg_list), str(pace))
-            + " \\n"
-    )
-    print(output + '"')
-    file.writelines(output + '"' + "\n")
-    file.close()
 
 
 class Experiment:
@@ -382,33 +204,17 @@ class Experiment:
                            feature_nicknames: Optional[list[str]] = None):
         assert isinstance(lagtime, str), "Lagtime must be a string (e.g. `10ns')."
         samples = self.get_trajectory()
-        lagtime = parse_quantity(lagtime)
-        lagstep = math.floor(lagtime / self.savefreq)
-        if lagstep < 1:
-            raise ValueError(
-                f"Lagtime provided ({lagtime}) is less than the saving interval of the trajectory ({self.savefreq}).")
-        else:
-            print(f"Lagtime {lagtime} corresponds to a lag step of {lagstep}.")
-
-        # Clustering
         # TODO: make clustering work for sin, cos features
+        msm = MSM(n_clusters, lagtime=lagtime)
+        msm.fit(data=samples, timestep=self.savefreq)
+        msm.plot_timescales()
+        msm.plot_transition_graph(threshold_probability=1e-2)
 
-        clustering = msm_clustering(samples, n_clusters)
-        discrete_traj = msm_discrete_traj(clustering, samples)
-        counts = msm_transition_counts(discrete_traj, lagstep)
-        msm = maximum_likelihood_msm(counts)
-        fix, ax = init_plot("MSM State Timescales", "state", f"timescale (x{self.savefreq})")
-        ax.plot(msm.timescales())
-        plt.show()
-        plot_transition_graph(msm, lagstep, self.savefreq)
-
-        print(clustering.cluster_centers)
         feature_ids = get_feature_ids_from_names(features, self.featurizer)
         assert len(feature_ids) == 2
-        print(feature_ids)
         landmark_points = {}
-        for i in range(msm.n_states):
-            landmark_points[str(i + 1)] = tuple(clustering.cluster_centers[i, feature_ids])
+        for i in range(msm.number_of_states):
+            landmark_points[str(i + 1)] = tuple(msm.state_centres[i, feature_ids])
 
         self.free_energy_plot(features, feature_nicknames, landmark_points=landmark_points)
 
@@ -433,7 +239,7 @@ class Experiment:
     def implied_timescale_analysis(self, max_lag: int = 10, increment: int = 1, yscale: str = 'log'):
         """
         Illustrates how TICA implied timescales vary as the lagtime varies.
-        For more details on this approach, consult http://docs.markovmodel.org/lecture_implied_timescales.html.
+        For more details on this approach, consult https://docs.markovmodel.org/lecture_implied_timescales.html.
         """
         lagtimes = np.arange(1, max_lag, increment)
         # save current TICA obj
@@ -465,13 +271,13 @@ class Experiment:
         if CV == "PCA":
             self.CVs[CV] = sklearn.decomposition.PCA(n_components=dim, **kwargs).fit(trajectory[::stride])
         elif CV == "TICA":
-            assert_kwarg(kwargs, kwarg="lagtime", CV=CV)
+            assert_kwarg(kwargs, kwarg="lagtime", obj_name=CV)
             # other kwargs: epsilon, var_cutoff, scaling, observable_transform
             self.CVs[CV] = deeptime.decomposition.TICA(dim=dim, **kwargs).fit_fetch(
                 trajectory[::stride]
             )
         elif CV == "VAMP":
-            assert_kwarg(kwargs, kwarg="lagtime", CV=CV)
+            assert_kwarg(kwargs, kwarg="lagtime", obj_name=CV)
             # other kwargs: epsilon, var_cutoff, scaling, epsilon, observable_transform
             self.CVs[CV] = deeptime.decomposition.VAMP(dim=dim, **kwargs).fit_fetch(
                 trajectory[::stride]

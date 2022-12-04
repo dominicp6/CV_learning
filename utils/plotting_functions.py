@@ -1,5 +1,6 @@
 import os
 import pickle
+from typing import Optional
 
 from matplotlib import pyplot as plt
 
@@ -37,9 +38,9 @@ def _set_fig_size(width: float, height: float, ncols: int, nrows: int, scale: st
     return figsize
 
 def init_plot(
-    title: str,
-    xlabel: str,
-    ylabel: str,
+    title: Optional[str],
+    xlabel: Optional[str],
+    ylabel: Optional[str],
     figsize=(6, 4),
     xscale="linear",
     yscale="linear",
@@ -56,9 +57,9 @@ def init_plot(
 def init_subplot(
     nrows: int,
     ncols: int,
-    title: str,
-    xlabel: str,
-    ylabel: str,
+    title: Optional[str],
+    xlabel: Optional[str],
+    ylabel: Optional[str],
     width: float = 6,
     height: float = 4,
     scale: str = "auto",
@@ -84,7 +85,7 @@ def init_multiplot(
         nrows: int,
         ncols: int,
         panels: list[tuple[str, str]],
-        title: str,
+        title: Optional[str],
         width: float = 6,
         height: float = 4,
         scale: str = "auto",

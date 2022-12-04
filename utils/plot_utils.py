@@ -21,7 +21,7 @@ from utils.diffusion_utils import (
     project_points_to_line,
     free_energy_estimate_2D,
 )
-from MarkovStateModel import MSM
+# from MarkovStateModel import MSM
 
 type_kramers_rates = list[tuple[tuple[int, int], float]]
 
@@ -98,22 +98,22 @@ def plot_minima(minima_list: npt.NDArray[np.int], y_variable: np.array) -> None:
             color="b",
         )
 
-# TODO: np
-def display_state_boundaries(msm: MSM, y_coordinate: list[float]) -> list[float]:
-    voronoi_cell_boundaries = [
-        (msm.sorted_state_centers[i + 1] + msm.sorted_state_centers[i]) / 2
-        for i in range(len(msm.sorted_state_centers) - 1)
-    ]
-    for boundary in voronoi_cell_boundaries:
-        plt.vlines(
-            boundary,
-            ymin=min(y_coordinate) - 0.2 * (max(y_coordinate) - min(y_coordinate)),
-            ymax=min(y_coordinate) - 0.1 * (max(y_coordinate) - min(y_coordinate)),
-            linestyle="--",
-            color="k",
-        )
-
-    return voronoi_cell_boundaries
+# TODO: np, move into MSM file
+# def display_state_boundaries(msm: MSM, y_coordinate: list[float]) -> list[float]:
+#     voronoi_cell_boundaries = [
+#         (msm.sorted_state_centers[i + 1] + msm.sorted_state_centers[i]) / 2
+#         for i in range(len(msm.sorted_state_centers) - 1)
+#     ]
+#     for boundary in voronoi_cell_boundaries:
+#         plt.vlines(
+#             boundary,
+#             ymin=min(y_coordinate) - 0.2 * (max(y_coordinate) - min(y_coordinate)),
+#             ymax=min(y_coordinate) - 0.1 * (max(y_coordinate) - min(y_coordinate)),
+#             linestyle="--",
+#             color="k",
+#         )
+#
+#     return voronoi_cell_boundaries
 
 
 def display_state_numbers(boundaries: np.array, x_variable: np.array, y_variable: np.array, digit_width: float) -> None:
