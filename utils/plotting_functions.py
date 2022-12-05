@@ -124,8 +124,6 @@ def save_fig(
     save_data: bool = True,
     show_fig: bool = True,
 ):
-    if show_fig:
-        plt.show()
     if save_data:
         data = locals()
         with open(os.path.join(save_dir, f"{name}.pickle"), 'wb') as f:
@@ -136,5 +134,9 @@ def save_fig(
 
     if both_formats:
         fig.savefig(os.path.join(save_dir, f"{name}.png"), bbox_inches="tight", dpi=300)
+
+    if show_fig:
+        plt.show()
+
     if close:
         plt.close(fig)  # otherwise figure may hang around in memory

@@ -213,12 +213,12 @@ class MSM:
     def _add_edge(self, graph: nx.Graph, i: int, j: int, edge_labels: dict):
         transition_step = mfpt(self.msm.transition_matrix, target=j, origin=i, tau=self.lagstep)
         transition_time = f"{round_format_unit(transition_step * self.timestep, 3)}"
-        graph.add_edge(i, j)
+        graph.add_edge(i, j, weight=transition_step)
         edge_labels[(i, j)] = f"{self.msm.transition_matrix[i, j]:.3e} ({transition_time})"
 
     @staticmethod
     def _draw_graph(graph, ax, edge_labels):
-        pos = nx.fruchterman_reingold_layout(graph)
+        pos = nx.spring_layout(graph, iterations=25, weight='weight')
         nx.draw_networkx_nodes(graph, pos, ax=ax)
         nx.draw_networkx_labels(graph, pos, ax=ax, labels=nx.get_node_attributes(graph, 'title'))
         nx.draw_networkx_edges(graph, pos, ax=ax, arrowstyle='-|>', connectionstyle='arc3, rad=0.3')

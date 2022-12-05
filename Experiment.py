@@ -180,7 +180,7 @@ class Experiment:
         # get traj of features and trim to data fraction
         feature_traj = get_feature_trajs_from_names(
             features, self.featurized_traj, self.featurizer
-        )[: int(data_fraction * self.num_frames)]
+        )[:int(data_fraction * self.num_frames)]
         if self.bias_potential_traj:
             # biased experiments require contour plots
             ax, im = self._contour_fes(ax, feature_traj)
@@ -194,21 +194,22 @@ class Experiment:
         plt.gca().set_aspect("equal")
         if landmark_points:
             for point, coordinates in landmark_points.items():
-                plt.plot(coordinates[0], coordinates[1], marker='o', markerfacecolor='k')
-                plt.annotate(point, coordinates)
+                plt.plot(coordinates[0], coordinates[1], marker='o', markerfacecolor='w')
+                plt.annotate(point, coordinates, color='w')
         save_fig(fig, save_dir=os.getcwd(), name=save_name)
 
         return
 
     def markov_state_model(self, n_clusters: int, lagtime: str, features: list[str],
-                           feature_nicknames: Optional[list[str]] = None):
+                           feature_nicknames: Optional[list[str]] = None,
+                           threshold_probability: float = 1e-2):
         assert isinstance(lagtime, str), "Lagtime must be a string (e.g. `10ns')."
         samples = self.get_trajectory()
         # TODO: make clustering work for sin, cos features
         msm = MSM(n_clusters, lagtime=lagtime)
         msm.fit(data=samples, timestep=self.savefreq)
         msm.plot_timescales()
-        msm.plot_transition_graph(threshold_probability=1e-2)
+        msm.plot_transition_graph(threshold_probability=threshold_probability)
 
         feature_ids = get_feature_ids_from_names(features, self.featurizer)
         assert len(feature_ids) == 2
@@ -513,9 +514,11 @@ class Experiment:
             bins=bins,
         )
         masked_free_energy = np.ma.array(
-            free_energy, mask=(free_energy > nan_threshold)
+            free_energy, mask=(free_energy > nan_threshold)  # true indicates a masked (invalid) value
         )
-        im = ax.pcolormesh(xedges, yedges, masked_free_energy)
+
+        im = ax.pcolormesh(np.repeat(yedges[..., None], repeats=len(yedges), axis=1),
+                           np.repeat(xedges[None, ...], repeats=len(xedges), axis=0), masked_free_energy)
 
         return ax, im
 

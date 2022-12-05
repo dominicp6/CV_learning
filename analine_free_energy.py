@@ -92,6 +92,6 @@ if __name__ == "__main__":
     psi = [6, 8, 14, 16]
     compute_dihedral_trajectory(
         pdb_file="./alanine.pdb",
-        trajectory="./TICA/outputs/production_alanine_amber_213804_190722/trajectory.dcd",
+        trajectory="./TICA/outputs/production_alanine_amber_213804_190722/traj_1ps.dcd",
         dihedrals=[phi, psi],
     )

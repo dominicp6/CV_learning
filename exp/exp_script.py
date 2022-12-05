@@ -1,9 +1,9 @@
 import subprocess
 
-SCRIPT_DIR = '..'
-DATA_DIR = './data/deca-alanine'
-DURATION = '5us'
-SAVE_FRQ = '1ps'
+SCRIPT_DIR = '../..'
+DATA_DIR = '../data/deca-alanine'
+DURATION = '0.62us'
+SAVE_FRQ = '400ps'
 STEP_SIZE = '2fs'
 FRIC_COEFF = '1ps'
 PRECISION = 'mixed'
@@ -16,6 +16,10 @@ CUTOFF_METHOD = 'CutoffPeriodic'
 periodic = True
 
 
+# TODO: Saving water in trajectory
+# TODO: Check water model correctly saved to metadata?
+# TODO: Fix progress bar when resuming a previous experiment
+
 # from exp.openmm_utils import fix_pdb
 #
 # fix_pdb(f"{DATA_DIR}/deca-ala.pdb")
@@ -23,7 +27,7 @@ periodic = True
 #     if i == 0:
 pr = '-pr' if periodic else ''
 subprocess.call(
-    f"python {SCRIPT_DIR}/run_openmm.py {DATA_DIR}/deca-alanine-processed.pdb amber {PRECISION} -d {DURATION} -c {FRIC_COEFF} -f {SAVE_FRQ} -s {STEP_SIZE} -t {TEMP} -p {PRESSURE} -sp {SOLV_PADDING} -nbc {CUTOFF_DIST} -cm {CUTOFF_METHOD} {pr} -m",
+    f"python {SCRIPT_DIR}/run_openmm.py {DATA_DIR}/deca-alanine-processed.pdb amber -r /home/dominic/PycharmProjects/CV_learning/exp/outputs/production_deca-alanine-processed_amber_114508_261122 {PRECISION} -d {DURATION} -c {FRIC_COEFF} -f {SAVE_FRQ} -s {STEP_SIZE} -t {TEMP} -p {PRESSURE} -sp {SOLV_PADDING} -nbc {CUTOFF_DIST} -cm {CUTOFF_METHOD} {pr} -w {WATER} -m",
     shell=True,
 )
 

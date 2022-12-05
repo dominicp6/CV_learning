@@ -99,7 +99,7 @@ class KramersRateEvaluator:
         options: Optional[dict] = None,
     ) -> Union[RegularSpaceClustering, KmeansClustering]:
 
-        if cluster_type is not "kmeans":
+        if cluster_type != "kmeans":
             raise NotImplemented("Only kmeans clustering implemented.")
 
         if options["dmin"] is None:

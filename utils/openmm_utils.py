@@ -329,6 +329,7 @@ class OpenMMSimulation:
                 self.CHECKPOINT_FN,
                 self.TRAJECTORY_FN,
                 self.STATE_DATA_FN,
+                self.METADATA_FN,
             )
 
             if not all(filename in resume_contains for filename in resume_requires):
@@ -437,12 +438,12 @@ class OpenMMSimulation:
         return modeller
 
     def write_pdb(self, pdb: app.PDBFile, modeller: app.Modeller):
-        # for convenience, create "topology.pdb" of the raw peptide, as it is saved in the dcd.
+        # for convenience, create "top_1ps.pdb" of the raw peptide, as it is saved in the dcd.
         # this is helpful for analysis scripts which rely on it down the line
         pdb.writeFile(
             modeller.getTopology(),
             modeller.getPositions(),
-            open(os.path.join(self.output_dir, "topology.pdb"), "w"),
+            open(os.path.join(self.output_dir, "top_1ps.pdb"), "w"),
         )
         # If there are water molecules in the topology file, then save an additional topology
         # file excluding those water molecules
@@ -631,8 +632,8 @@ class OpenMMSimulation:
 
     def post_processing_and_analysis(self):
         clean_and_align_trajectory(working_dir=self.output_dir,
-                                   traj_name='trajectory.dcd',
-                                   top_name='topology.pdb',
+                                   traj_name='traj_1ps.dcd',
+                                   top_name='top_1ps.pdb',
                                    save_name='trajectory_processed')
         report = pd.read_csv(os.path.join(self.output_dir, self.STATE_DATA_FN))
         self.make_graphs(report)
