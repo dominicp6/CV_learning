@@ -234,7 +234,6 @@ class MSM:
         plt.show()
 
     def plot_timescales(self):
-        # TODO: update y-axis to absolute value
         fix, ax = init_plot("MSM State Timescales", "state", f"timescale (x{self.timestep})")
-        ax.plot(self.msm.timescales())
+        ax.plot(self.number_of_states-1, self.msm.timescales() * self.timestep)
         plt.show()

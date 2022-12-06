@@ -220,7 +220,7 @@ class Experiment:
         self.free_energy_plot(features, feature_nicknames, landmark_points=landmark_points)
 
     # TODO: add PCCA+ function for "coarse graining" the MSM
-    def contact_analysis(self, contact_threshold: float = 2.0, times: list[str] = None):
+    def timeseries_analysis(self, contact_threshold: float = 2.0, times: list[str] = None):
         duration_ns = self.duration.in_units_of(unit.nanoseconds)._value
 
         if times is not None:
@@ -229,12 +229,12 @@ class Experiment:
         else:
             times = ['0.0ns', f'{duration_ns / 2}ns', f'{duration_ns}ns']
             frames = [0, int(len(self.traj) / 2), -1]
-        fig, axs = init_multiplot(nrows=3, ncols=3, title='Contact Analysis', panels=[('0', '0'), ('0', '1'),
+        fig, axs = init_multiplot(nrows=6, ncols=3, title='Contact Analysis', panels=[('0', '0'), ('0', '1'),
                                                                                       ('0', '2'), ('1', 'all'),
                                                                                       ('2', 'all')])
 
         self._plot_contact_matrices(fig, axs, frames, times)
-        self._plot_contacts_over_time(axs, contact_threshold, times, duration_ns)
+        self._plot_trajectory_timeseries(axs, contact_threshold, times, duration_ns)
         plt.show()
 
     def implied_timescale_analysis(self, max_lag: int = 10, increment: int = 1, yscale: str = 'log'):
@@ -556,19 +556,41 @@ class Experiment:
             cbar_ax = fig.add_axes([cbar_pos, 0.66, 0.02, 0.25])
             fig.colorbar(im, cax=cbar_ax)
 
-    def _plot_contacts_over_time(self, axs, contact_threshold: float, times: list[str], duration_ns: float):
+    def _plot_trajectory_timeseries(self, axs, contact_threshold: float, times: list[str], duration_ns: float):
         distances, pairs = mdtraj.compute_contacts(self.traj)
         number_of_close_contacts = np.sum((distances < contact_threshold), axis=1)  # sum along the columns (contacts)
         rms_dist = np.sqrt(np.mean(distances ** 2, axis=1))
+        rmsd_initial_structure = mdtraj.rmsd(target=self.traj, reference=self.traj, frame=0)
+        acylindricity = mdtraj.acylindricity(self.traj)
+        radius_of_gyration = mdtraj.compute_rg(self.traj)
 
-        # plot of number of contacts in the trajectory as a function of time
+        # number of contacts
         x_var = np.arange(0, duration_ns, duration_ns / self.num_frames)
         axs[3].plot(x_var, number_of_close_contacts, linewidth=0.5)
         [axs[3].axvline(x=parse_quantity(t)._value, color='r') for t in times]
         axs[3].set_xlabel('time (ns)')
         axs[3].set_ylabel(f'#contacts < {contact_threshold} $nm$')
 
+        # RMSD of contacts
         axs[4].plot(x_var, rms_dist, linewidth=0.5)
         [axs[4].axvline(x=parse_quantity(t)._value, color='r') for t in times]
         axs[4].set_xlabel('time (ns)')
         axs[4].set_ylabel(f'RMSD Res-Res ($nm$)')
+
+        # RMSD relative to initial structure
+        axs[5].plot(x_var, rmsd_initial_structure, linewidth=0.5)
+        [axs[5].axvline(x=parse_quantity(t)._value, color='r') for t in times]
+        axs[5].set_xlabel('time (ns)')
+        axs[5].set_ylabel(f'RMSD Initial Structure ($nm$)')
+
+        # acylindricity
+        axs[5].plot(x_var, acylindricity, linewidth=0.5)
+        [axs[5].axvline(x=parse_quantity(t)._value, color='r') for t in times]
+        axs[5].set_xlabel('time (ns)')
+        axs[5].set_ylabel(f'Acylindricity')
+
+        # radius of gyration
+        axs[6].plot(x_var, radius_of_gyration, linewidth=0.5)
+        [axs[6].axvline(x=parse_quantity(t)._value, color='r') for t in times]
+        axs[6].set_xlabel('time (ns)')
+        axs[6].set_ylabel(f'Radius of gyration ($nm$)')
