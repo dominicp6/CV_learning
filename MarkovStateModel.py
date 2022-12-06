@@ -21,7 +21,7 @@ from deeptime.markov.tools.analysis import mfpt
 from tqdm import tqdm
 
 from utils.openmm_utils import parse_quantity
-from utils.plotting_functions import init_plot
+from utils.plotting_functions import init_plot, init_multiplot
 from utils.openmm_utils import round_format_unit
 from utils.plot_utils import my_draw_networkx_edge_labels
 
@@ -62,9 +62,9 @@ class MSM:
         if self.lagstep < 1:
             raise ValueError(
                 f"Lagtime provided ({self.lagtime}) is less than the timestep ({self.timestep}).")
-        if self.verbose:
-            print(f"Initiating MSM model with lagtime {self.lagtime} (lagstep {self.lagstep}).")
-        self.trajectory, self.state_centres = self._cluster(data)
+        # if self.verbose:
+        #     print(f"Initiating MSM model with lagtime {self.lagtime} (lagstep {self.lagstep}).")
+        self.trajectory, self.state_centres, self.clustering = self._cluster(data)
         self.transition_counts = self._transition_counts(self.trajectory)
         self.msm = self._maximum_likelihood_msm(self.transition_counts)
         self.transition_matrix = self.msm.transition_matrix
@@ -76,24 +76,24 @@ class MSM:
                            fixed_seed=self.clustering_seed,
                            n_jobs=os.cpu_count() - 1,
                            progress=tqdm)
-        self.clustering = estimator.fit(data).fetch_model()
-        if self.verbose:
-            self.plot_inertia()
-            print("Cluster centres", self.clustering.cluster_centers)
-        trajectory = self.clustering.transform(data)
-        state_centres = self.clustering.cluster_centers
+        clustering = estimator.fit(data).fetch_model()
+        # if self.verbose:
+        #     self.plot_inertia()
+        #     print("Cluster centres", self.clustering.cluster_centers)
+        trajectory = clustering.transform(data)
+        state_centres = clustering.cluster_centers
         if self.dimension == 1:
             trajectory = self.relabel_trajectory_by_coordinate_chronology(trajectory, state_centres)
             state_centres = np.sort(self.state_centres)
 
-        return trajectory, state_centres
+        return trajectory, state_centres, clustering
 
     def _transition_counts(self, trajectory) -> TransitionCountModel:
         estimator = TransitionCountEstimator(lagtime=self.lagstep, count_mode=self.transition_count_mode)
         counts = estimator.fit(trajectory).fetch_model()
-        if self.verbose:
-            print("Weakly connected sets:", counts.connected_sets(directed=False))
-            print("Strongly connected sets:", counts.connected_sets(directed=True))
+        # if self.verbose:
+        #     print("Weakly connected sets:", counts.connected_sets(directed=False))
+        #     print("Strongly connected sets:", counts.connected_sets(directed=True))
 
         return counts
 
@@ -193,18 +193,20 @@ class MSM:
         plt.title(r"MSM Stationary Distribution $\mathbf{\pi}$", fontsize=16)
         plt.show()
 
-    def plot_transition_graph(self, threshold_probability: float = 1e-2):
+    def plot_transition_graph(self, threshold_probability: float = 1e-2, ax=None):
         fig, ax = init_plot(f"Transition matrix with connectivity threshold {threshold_probability:.0e}",
-                            figsize=(10, 10), xlabel=None, ylabel=None)
+                              figsize=(10, 10), xlabel=None, ylabel=None, ax=ax)
         msm_graph = nx.DiGraph()
         edge_labels = {}
         self._add_nodes(msm_graph)
         for i in range(self.msm.n_states):
             for j in range(self.msm.n_states):
-                if self.msm.transition_matrix[i, j] > threshold_probability:
+                if self.msm.transition_matrix[i, j] > threshold_probability and i != j:  # don't plot self edges
                     self._add_edge(msm_graph, i, j, edge_labels)
 
         self._draw_graph(msm_graph, ax, edge_labels)
+
+        return ax
 
     def _add_nodes(self, graph):
         for i in range(self.msm.n_states):
@@ -224,17 +226,41 @@ class MSM:
         nx.draw_networkx_edges(graph, pos, ax=ax, arrowstyle='-|>', connectionstyle='arc3, rad=0.3')
         my_draw_networkx_edge_labels(graph, pos, ax=ax, edge_labels=edge_labels, rotate=False, rad=0.25)
 
-    def plot_inertia(self):
+    def plot_inertia(self, show: bool = True, ax=None):
         """
         Inertia measures how well a dataset was clustered by K-Means. It is calculated by measuring the distance
         between each data point and its centroid, squaring this distance, and summing these squares across one cluster.
         """
-        fig, ax = init_plot("Inertia of KMeans Training", "iteration", "inertia", xscale="log")
+        fig, ax = init_plot("Inertia of KMeans Training", "iteration", "inertia", xscale="log", ax=ax)
+        print(self.clustering.inertias)
         ax.plot(self.clustering.inertias)
-        plt.show()
+        if show:
+            plt.show()
 
-    def plot_timescales(self):
+        return ax
+
+    def plot_transition_matrix(self, show: bool = False, ax=None):
+        fig, ax = init_plot("Transition Matrix", "i", "j", ax=ax)
+        pos = ax.imshow(self.transition_matrix, cmap='Blues')
+        bar = plt.colorbar(pos)
+        if show:
+            plt.show()
+
+        return ax
+
+    def plot_stationary_distribution(self, show: bool = True, ax=None):
+        fig, ax = init_plot("MSM Stationary Distribution", "state", "probability", ax=ax)
+        ax.plot(self.msm.stationary_distribution)
+        if show:
+            plt.show()
+
+        return ax
+
+    def plot_timescales(self, show: bool = True, ax=None):
         # TODO: update y-axis to absolute value
-        fix, ax = init_plot("MSM State Timescales", "state", f"timescale (x{self.timestep})")
+        fig, ax = init_plot("MSM State Timescales", "state", f"timescale (x{self.timestep})", ax=ax)
         ax.plot(self.msm.timescales())
-        plt.show()
+        if show:
+            plt.show()
+
+        return ax
