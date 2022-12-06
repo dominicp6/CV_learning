@@ -2,6 +2,7 @@ import os
 import pickle
 from typing import Optional
 
+import numpy as np
 from matplotlib import pyplot as plt
 
 
@@ -44,12 +45,17 @@ def init_plot(
     figsize=(6, 4),
     xscale="linear",
     yscale="linear",
-    use_grid: bool = False,
+    grid_on: bool = False,
+    ax=None,
 ):
-    fig, ax = plt.subplots(figsize=figsize)
+    if not ax:
+        # If no axis provided, generate one (default)
+        fig, ax = plt.subplots(figsize=figsize)
+        fig.suptitle(title)
+    else:
+        fig = None
     ax.set(xscale=xscale, yscale=yscale, xlabel=xlabel, ylabel=ylabel)
-    ax.grid(use_grid)
-    fig.suptitle(title)
+    ax.grid(grid_on)
 
     return fig, ax
 
@@ -65,13 +71,13 @@ def init_subplot(
     scale: str = "auto",
     sharex: bool = True,
     sharey: bool = True,
-    grid: bool = False,
+    grid_on: bool = False,
 ):
     figsize = _set_fig_size(width, height, ncols, nrows, scale)
     fig, axs = plt.subplots(nrows, ncols, figsize=figsize, sharex=sharex, sharey=sharey)
 
     for ax in axs.flat:
-        ax.grid(grid)  # maybe add grid lines
+        ax.grid(grid_on)  # maybe add grid lines
 
     fig.suptitle(title)
     fig.supxlabel(xlabel)
@@ -84,12 +90,12 @@ def init_subplot(
 def init_multiplot(
         nrows: int,
         ncols: int,
-        panels: list[tuple[str, str]],
+        panels: list[str],
         title: Optional[str],
         width: float = 6,
         height: float = 4,
         scale: str = "auto",
-        grid: bool = False
+        grid_on: bool = False
 ):
     figsize = _set_fig_size(width, height, ncols, nrows, scale)
     fig = plt.figure(figsize=figsize)
@@ -97,17 +103,11 @@ def init_multiplot(
 
     panel_axs = []
     for panel in panels:
-        if panel[0] == 'all' and panel[1] != 'all':
-            panel_axs.append(fig.add_subplot(grid[:, eval(panel[1])]))
-        elif panel[1] == 'all' and panel[0] != 'all':
-            panel_axs.append(fig.add_subplot(grid[eval(panel[0]), :]))
-        elif panel[0] == 'all' and panel[1] == 'all':
-            panel_axs.append(fig.add_subplot(grid[:, :]))
-        else:
-            panel_axs.append(fig.add_subplot(grid[eval(panel[0]), eval(panel[1])]))
+        slice_ = eval(f'np.s_[{panel}]')
+        panel_axs.append(fig.add_subplot(grid[slice_]))
 
     for ax in panel_axs:
-        ax.grid(grid)  # maybe add grid lines
+        ax.grid(grid_on)  # maybe add grid lines
 
     fig.suptitle(title)
     fig.tight_layout()  # adjust the padding between and around subplots to neaten things up

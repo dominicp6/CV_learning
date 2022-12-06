@@ -24,6 +24,7 @@ import openmm.unit as unit
 from deeptime.util.validation import implied_timescales
 from deeptime.plots import plot_implied_timescales
 from tqdm import tqdm
+from scipy.spatial import Voronoi
 
 from KramersRateEvaluator import KramersRateEvaluator
 from MarkovStateModel import MSM
@@ -31,6 +32,7 @@ from Dihedrals import Dihedrals
 from utils.diffusion_utils import free_energy_estimate_2D
 # import pydiffmap.diffusion_map as dfm
 import mdfeature.features as feat
+from utils.plot_utils import voronoi_plot_2d
 from utils.experiment_utils import write_metadynamics_line, get_metadata_file, load_pdb, load_trajectory
 from utils.general_utils import supress_stdout, assert_kwarg, remove_nans
 from utils.openmm_utils import parse_quantity, time_to_iteration_conversion
@@ -170,13 +172,13 @@ class Experiment:
             data_fraction: float = 1.0,
             bins: int = 100,
             landmark_points: Optional[dict[str, tuple[float, float]]] = None,
-    ) -> None:
+            save_data: bool = True,
+            show_fig: bool = True,
+            close_fig: bool = True,
+            ax=None,
+    ):
         feature_nicknames = self._check_fes_arguments(features, feature_nicknames)
-        fig, ax = init_plot(
-            "Free Energy Surface",
-            f"${feature_nicknames[0]}$",
-            f"${feature_nicknames[1]}$",
-        )
+        fig, ax = init_plot("Free Energy Surface", f"${feature_nicknames[0]}$", f"${feature_nicknames[1]}$", ax=ax)
         # get traj of features and trim to data fraction
         feature_traj = get_feature_trajs_from_names(
             features, self.featurized_traj, self.featurizer
@@ -194,11 +196,13 @@ class Experiment:
         plt.gca().set_aspect("equal")
         if landmark_points:
             for point, coordinates in landmark_points.items():
-                plt.plot(coordinates[0], coordinates[1], marker='o', markerfacecolor='w')
-                plt.annotate(point, coordinates, color='w')
-        save_fig(fig, save_dir=os.getcwd(), name=save_name)
+                ax.plot(coordinates[0], coordinates[1], marker='o', markerfacecolor='w')
+                ax.annotate(point, coordinates, color='w')
+            vor = Voronoi(np.array(list(landmark_points.values())))
+            fig = voronoi_plot_2d(vor, ax=ax, line_colors='red', line_width=2)
+        save_fig(fig, save_dir=os.getcwd(), name=save_name, save_data=save_data, show_fig=show_fig, close=close_fig)
 
-        return
+        return fig, ax
 
     def markov_state_model(self, n_clusters: int, lagtime: str, features: list[str],
                            feature_nicknames: Optional[list[str]] = None,
@@ -207,9 +211,12 @@ class Experiment:
         samples = self.get_trajectory()
         # TODO: make clustering work for sin, cos features
         msm = MSM(n_clusters, lagtime=lagtime)
+        fig, axs = init_multiplot(nrows=5, ncols=3, panels=['0:2,0:2', '0,2', '1,2', '2:,:-1', '2,2'], title='MSM')
         msm.fit(data=samples, timestep=self.savefreq)
-        msm.plot_timescales()
-        msm.plot_transition_graph(threshold_probability=threshold_probability)
+        msm.plot_timescales(show=False, ax=axs[1])
+        msm.plot_transition_matrix(show=False, ax=axs[4])
+        msm.plot_transition_graph(threshold_probability=threshold_probability, ax=axs[3])
+        msm.plot_stationary_distribution(show=False, ax=axs[2])
 
         feature_ids = get_feature_ids_from_names(features, self.featurizer)
         assert len(feature_ids) == 2
@@ -217,7 +224,11 @@ class Experiment:
         for i in range(msm.number_of_states):
             landmark_points[str(i + 1)] = tuple(msm.state_centres[i, feature_ids])
 
-        self.free_energy_plot(features, feature_nicknames, landmark_points=landmark_points)
+        self.free_energy_plot(features, feature_nicknames,
+                              landmark_points=landmark_points,
+                              ax=axs[0], save_data=False,
+                              show_fig=False, close_fig=False)
+        plt.show()
 
     # TODO: add PCCA+ function for "coarse graining" the MSM
     def timeseries_analysis(self, contact_threshold: float = 2.0, times: list[str] = None):
@@ -229,9 +240,8 @@ class Experiment:
         else:
             times = ['0.0ns', f'{duration_ns / 2}ns', f'{duration_ns}ns']
             frames = [0, int(len(self.traj) / 2), -1]
-        fig, axs = init_multiplot(nrows=6, ncols=3, title='Contact Analysis', panels=[('0', '0'), ('0', '1'),
-                                                                                      ('0', '2'), ('1', 'all'),
-                                                                                      ('2', 'all')])
+        fig, axs = init_multiplot(nrows=6, ncols=3, title='Contact Analysis',
+                                  panels=['0,0', '0,1', '0,2', '1,:', '2,:', '3,:', '4,:', '5,:'])
 
         self._plot_contact_matrices(fig, axs, frames, times)
         self._plot_trajectory_timeseries(axs, contact_threshold, times, duration_ns)
