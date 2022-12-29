@@ -91,7 +91,7 @@ def init_multiplot(
         nrows: int,
         ncols: int,
         panels: list[str],
-        title: Optional[str],
+        title: Optional[str] = None,
         width: float = 6,
         height: float = 4,
         scale: str = "auto",
@@ -109,7 +109,8 @@ def init_multiplot(
     for ax in panel_axs:
         ax.grid(grid_on)  # maybe add grid lines
 
-    fig.suptitle(title)
+    if title:
+        fig.suptitle(title)
     fig.tight_layout()  # adjust the padding between and around subplots to neaten things up
 
     return fig, panel_axs

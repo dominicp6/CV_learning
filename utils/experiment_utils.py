@@ -18,7 +18,7 @@ from utils.general_utils import select_file_option, check_if_memory_available
 
 def load_pdb(loc: str) -> mdtraj.Trajectory:
     pdb_files = glob.glob(os.path.join(loc, "*.pdb"))
-    assert len(pdb_files) != 0, f"Read error: no PDB files found in directory."
+    assert len(pdb_files) != 0, f"Read error: no PDB files (*.pdb) found in directory."
     selection = select_file_option(pdb_files, 'PDB')
     selected_pdb = pdb_files[selection]
     check_if_memory_available(selected_pdb)
@@ -30,7 +30,7 @@ def load_trajectory(
         loc: str, topology: Union[str, mdtraj.Trajectory, mdtraj.Topology]
 ) -> mdtraj.Trajectory:
     traj_files = glob.glob(os.path.join(loc, "*.dcd"))
-    assert len(traj_files) != 0, f"Read error: no traj files found in directory."
+    assert len(traj_files) != 0, f"Read error: no traj files (*.dcd) found in directory."
     selection = select_file_option(traj_files, 'traj')
     selected_traj = traj_files[selection]
     check_if_memory_available(selected_traj)
@@ -42,7 +42,7 @@ def get_metadata_file(
         loc: str, keyword: str
 ):
     metadata_files = glob.glob(os.path.join(loc, f"*{keyword}*.json"))
-    assert len(metadata_files) != 0, f"Read error: no metadata files found in directory."
+    assert len(metadata_files) != 0, f"Read error: no metadata files ({keyword}*.json) found in directory."
     selection = select_file_option(metadata_files, "metadata")
     selected_metadata = metadata_files[selection]
 

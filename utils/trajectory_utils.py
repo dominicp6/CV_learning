@@ -4,6 +4,30 @@ from typing import Optional
 import mdtraj as md
 
 
+def merge_dcd_trajectories_in_dir(
+    working_dir: str,
+    top_name: str,
+    save_name: str,
+):
+    top_path = os.path.join(working_dir, top_name)
+
+    traj_names = get_filenames_with_suffix(working_dir, suffix='.dcd')
+    print("The trajectories are being merged in alphabetical order:")
+    print(traj_names)
+
+    trajs = [md.load_dcd(os.path.join(working_dir, traj_name), top=top_path) for traj_name in traj_names]
+    merged_traj = md.join(trajs)
+    save_traj(merged_traj, working_dir, save_name)
+
+
+def get_filenames_with_suffix(directory, suffix):
+    filenames = os.listdir(directory)
+    filenames_with_suffix = [filename for filename in filenames if filename.endswith(suffix)]
+    sorted_filenames = sorted(filenames_with_suffix)
+
+    return sorted_filenames
+
+
 def clean_and_align_trajectory(
     working_dir: str,
     top_name: str,

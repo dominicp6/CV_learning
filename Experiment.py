@@ -7,10 +7,10 @@
 
    Author: Dominic Phillips (dominicp6)
 """
-
 import os
 import json
 import copy
+import re
 from time import time
 from typing import Union, Optional
 
@@ -21,6 +21,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sklearn
 import openmm.unit as unit
+import nglview as nv
 from deeptime.util.validation import implied_timescales
 from deeptime.plots import plot_implied_timescales
 from tqdm import tqdm
@@ -38,7 +39,7 @@ from utils.general_utils import supress_stdout, assert_kwarg, remove_nans
 from utils.openmm_utils import parse_quantity, time_to_iteration_conversion
 from utils.plotting_functions import init_plot, init_multiplot, save_fig
 
-
+# TODO: fix free energy plot to make it work correctly with collective variables
 # TODO: think what is happening to water molecules in the trajectory
 # TODO: possibly replace with mdtraj featurizer
 def initialise_featurizer(
@@ -75,20 +76,6 @@ def get_feature_ids_from_names(
         feature_ids.append(all_features.index(feature))
 
     return feature_ids
-
-
-def get_feature_trajs_from_names(
-        feature_names: list[str],
-        featurized_traj: np.array,
-        featurizer: pyemma.coordinates.featurizer,
-) -> np.array:
-    feature_ids = get_feature_ids_from_names(feature_names, featurizer)
-
-    feature_trajs = []
-    for feature_id in feature_ids:
-        feature_trajs.append(featurized_traj[:, feature_id])
-
-    return np.array(feature_trajs)
 
 
 class Experiment:
@@ -153,6 +140,7 @@ class Experiment:
             self.features_provided,
         ) = self.__init_features(features)
 
+        self.CV_types = ['PCA', 'TICA', 'VAMP', 'DM']
         self.CVs = {"PCA": None, "TICA": None, "VAMP": None, "DM": None}
         self.kre = KramersRateEvaluator()
         self.discrete_traj = None
@@ -180,9 +168,7 @@ class Experiment:
         feature_nicknames = self._check_fes_arguments(features, feature_nicknames)
         fig, ax = init_plot("Free Energy Surface", f"${feature_nicknames[0]}$", f"${feature_nicknames[1]}$", ax=ax)
         # get traj of features and trim to data fraction
-        feature_traj = get_feature_trajs_from_names(
-            features, self.featurized_traj, self.featurizer
-        )[:int(data_fraction * self.num_frames)]
+        feature_traj = self.get_feature_trajs_from_names(features)[:int(data_fraction * self.num_frames)]
         if self.bias_potential_traj:
             # biased experiments require contour plots
             ax, im = self._contour_fes(ax, feature_traj)
@@ -240,30 +226,54 @@ class Experiment:
         else:
             times = ['0.0ns', f'{duration_ns / 2}ns', f'{duration_ns}ns']
             frames = [0, int(len(self.traj) / 2), -1]
-        fig, axs = init_multiplot(nrows=6, ncols=3, title='Contact Analysis',
-                                  panels=['0,0', '0,1', '0,2', '1,:', '2,:', '3,:', '4,:', '5,:'])
+        fig, axs = init_multiplot(nrows=6, ncols=3, panels=['0,0', '0,1', '0,2', '1,:', '2,:', '3,:', '4,:', '5,:'])
 
         self._plot_contact_matrices(fig, axs, frames, times)
         self._plot_trajectory_timeseries(axs, contact_threshold, times, duration_ns)
         plt.show()
 
-    def implied_timescale_analysis(self, max_lag: int = 10, increment: int = 1, yscale: str = 'log'):
+    def interact(self):
+        view = nv.show_mdtraj(self.traj)
+
+        return view
+
+    def implied_timescale_analysis(self,
+                                   max_lag: str,
+                                   increment: int = 1,
+                                   num_timescales: int = 2,
+                                   yscale: str = 'log',
+                                   xscale: str = 'linear'):
         """
         Illustrates how TICA implied timescales vary as the lagtime varies.
         For more details on this approach, consult https://docs.markovmodel.org/lecture_implied_timescales.html.
         """
+        assert isinstance(max_lag, str), "Max_lag must be a string (e.g. `10ns')."
+        max_lag = time_to_iteration_conversion(max_lag, self.duration, self.num_frames)
         lagtimes = np.arange(1, max_lag, increment)
+
         # save current TICA obj
         TICA_obj = copy.deepcopy(self.CVs['TICA'])
+
+        # learn TICA model for each lagtime
         models = []
         for lagtime in tqdm(lagtimes):
             supress_stdout(self.compute_cv)('TICA', lagtime=lagtime)
             models.append(self.CVs['TICA'])
+
+        # restore original TICA obj
         self.CVs['TICA'] = TICA_obj
+
+        # compute implied timescales and make time unit conversion
         its_data = implied_timescales(models)
-        fig, ax = init_plot('Implied timescales (TICA)', 'lag time (steps)', 'timescale (steps)', yscale=yscale)
-        plot_implied_timescales(its_data, n_its=2, ax=ax)
-        plt.annotate(f"NB: One step corresponds to a time of {self.savefreq}", xy=(90, 1), xycoords='figure points')
+        its_data._lagtimes *= self.savefreq
+        its_data._its *= self.savefreq
+
+        # plot implied timescales
+        fig, ax = init_plot('Implied timescales (TICA)', f'lag time ({self.savefreq.unit})',
+                            f'timescale ({self.savefreq.unit})', xscale=xscale, yscale=yscale)
+        plot_implied_timescales(its_data, n_its=num_timescales, ax=ax)
+
+        # plt.annotate(f"NB: One step corresponds to a time of {self.savefreq}", xy=(90, 1), xycoords='figure points')
         plt.show()
 
     def compute_cv(self, CV: str, dim: Optional[int] = None, stride: int = 1, **kwargs):
@@ -321,13 +331,14 @@ class Experiment:
         )
 
     def _get_cv(self, CV, dim):
+        #  TODO: fix models other than TICA
         assert CV in self.CVs.keys(), f"Method '{CV}' not in {self.CVs.keys()}"
         if self.CVs[CV] is None:
             raise ValueError(f"{CV} CVs not computed.")
         if CV in ["PCA", "VAMP"]:
             return self.CVs[CV].get_output()[0][:, dim]
         elif CV == "TICA":
-            return self.CVs[CV].eigenvectors[:, dim]
+            return self.CVs[CV].instantaneous_coefficients[dim]
         elif CV == "DM":
             return self.CVs[CV].evecs[:, dim]
         else:
@@ -378,6 +389,34 @@ class Experiment:
             write_metadynamics_line(
                 height=gaussian_height, pace=gaussian_pace, CV=CV, file=f
             )
+
+    def get_feature_trajs_from_names(
+            self,
+            feature_names: list[str],
+    ) -> np.array:
+
+        # If the feature is a CV then it must be of the form "CVdim" e.g. "TICA0" or "PCA2"
+        cv_features = [self._check_feature_is_cv_feature(feature_name) for feature_name in feature_names]
+
+        # If any of the features are CVs, then we need to get the CVs from the Experiment object
+        if any(cv_features):
+            assert all(cv_features), "If any of the features are CVs, then all features must be CVs."
+            feature_trajs = []
+            for feature_name in feature_names:
+                match = self._check_feature_is_cv_feature(feature_name)
+                matched_string = match.group(1)
+                matched_number = int(re.findall(r"\d+", feature_name)[0])
+                print(matched_string, matched_number)
+                print(self._get_cv(matched_string, matched_number))
+                feature_trajs.append(self._get_cv(CV=matched_string, dim=matched_number))
+        # Otherwise, we can just get the features from the featurized trajectory
+        else:
+            feature_trajs = []
+            feature_ids = get_feature_ids_from_names(feature_names, self.featurizer)
+            for feature_id in feature_ids:
+                feature_trajs.append(self.featurized_traj[:, feature_id])
+
+        return np.array(feature_trajs)
 
     # ====================== INIT HELPERS =================================
     @staticmethod
@@ -492,6 +531,10 @@ class Experiment:
         return weights, bias_potential_traj
 
     # ====================== OTHER HELPERS =================================
+    def _check_feature_is_cv_feature(self, feature: str):
+        regex = r"^(" + "|".join(self.CV_types) + r")\d+$"
+        return re.match(regex, feature)
+
     def _check_fes_arguments(
             self,
             features: list[str],
@@ -507,8 +550,10 @@ class Experiment:
         # Check that the required features exist
         for feature in features:
             assert (
-                    feature in self.featurizer.describe()
-            ), f"Feature '{feature}' not found in available features ({self.featurizer.describe()})"
+                    (feature in self.featurizer.describe())
+                    or self._check_feature_is_cv_feature(feature)), \
+                f"Feature '{feature}' not found in available features ({self.featurizer.describe()}) " \
+                f"or CV types ({self.CV_types})."
 
         # Automatically set feature nicknames if they are not provided
         if not feature_nicknames:
@@ -556,14 +601,14 @@ class Experiment:
         contact_data = [mdtraj.compute_contacts(self.traj[frame]) for frame in frames]
         min_dist = 0
         max_dist = np.max(np.hstack((contact_data[0][0], contact_data[1][0], contact_data[2][0])))
-        cbar_x_axis_pos = [0.275, 0.602, 0.93]
+        cbar_x_axis_pos = [0.275, 0.602, 0.9275]
         for idx, cbar_pos in enumerate(cbar_x_axis_pos):
             im = axs[idx].imshow(mdtraj.geometry.squareform(contact_data[idx][0], contact_data[idx][1])[0],
                                  vmin=min_dist, vmax=max_dist)
             axs[idx].set_title(f'time = {times[idx]}')
             axs[idx].set_xlabel('Res Number')
             axs[idx].set_ylabel('Res Number')
-            cbar_ax = fig.add_axes([cbar_pos, 0.66, 0.02, 0.25])
+            cbar_ax = fig.add_axes([cbar_pos, 0.855, 0.02, 0.125])
             fig.colorbar(im, cax=cbar_ax)
 
     def _plot_trajectory_timeseries(self, axs, contact_threshold: float, times: list[str], duration_ns: float):
@@ -594,13 +639,13 @@ class Experiment:
         axs[5].set_ylabel(f'RMSD Initial Structure ($nm$)')
 
         # acylindricity
-        axs[5].plot(x_var, acylindricity, linewidth=0.5)
-        [axs[5].axvline(x=parse_quantity(t)._value, color='r') for t in times]
-        axs[5].set_xlabel('time (ns)')
-        axs[5].set_ylabel(f'Acylindricity')
-
-        # radius of gyration
-        axs[6].plot(x_var, radius_of_gyration, linewidth=0.5)
+        axs[6].plot(x_var, acylindricity, linewidth=0.5)
         [axs[6].axvline(x=parse_quantity(t)._value, color='r') for t in times]
         axs[6].set_xlabel('time (ns)')
-        axs[6].set_ylabel(f'Radius of gyration ($nm$)')
+        axs[6].set_ylabel(f'Acylindricity')
+
+        # radius of gyration
+        axs[7].plot(x_var, radius_of_gyration, linewidth=0.5)
+        [axs[7].axvline(x=parse_quantity(t)._value, color='r') for t in times]
+        axs[7].set_xlabel('time (ns)')
+        axs[7].set_ylabel(f'Radius of gyration ($nm$)')

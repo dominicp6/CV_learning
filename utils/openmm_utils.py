@@ -145,7 +145,7 @@ class OpenMMSimulation:
         self.STATE_DATA_FN = "state_data.csv"
         self.METADATA_FN = "metadata.json"
 
-        self.valid_ffs = ["ani2x", "ani1ccx", "amber", "ani2x_mixed", "ani1ccx_mixed"]
+        self.valid_ffs = ["amber", "charmm"]
         self.valid_precision = ["single", "mixed", "double"]
         self.valid_wms = ["tip3p", "tip3pfb", "spce", "tip4pew", "tip4pfb", "tip5p"]
 
@@ -352,7 +352,7 @@ class OpenMMSimulation:
         modeller = self.initialise_modeller(pdb)
         print("[x] Initialised modeller")
         self.write_pdb(pdb, modeller)
-        system = self.create_system(pdb)
+        system = self.create_system(modeller)
         print("Successfully created system")
 
         self.systemobjs = SystemObjs(pdb, modeller, peptide_indices, system)
@@ -407,6 +407,8 @@ class OpenMMSimulation:
     def initialise_forcefield(self) -> app.ForceField:
         if self.systemargs.forcefield == "amber":  # Create AMBER system
             self.force_field = app.ForceField("amber14-all.xml", "amber14/tip3p.xml")
+        elif self.systemargs.forcefield == "charmm": # Create CHARMM system
+            self.force_field = app.ForceField("charmm36.xml", "charmm36/water.xml")
         else:
             raise ValueError(f"Force field {self.systemargs.forcefield} not supported.")
 
@@ -416,6 +418,7 @@ class OpenMMSimulation:
         modeller = app.Modeller(pdb.topology, pdb.positions)
         if self.systemargs.resume:
             # Do not make any modifications to the modeller
+            print("Resuming simulation, skipping modeller modifications")
             pass
         else:
             # Check if the loaded topology file already has water
@@ -426,6 +429,7 @@ class OpenMMSimulation:
                 # If we are using a water model
                 if self.systemargs.watermodel:
                     # Add water to the modeller
+                    print("No water found in PDB file: Adding water...")
                     modeller.addSolvent(
                         self.force_field,
                         model=self.systemargs.watermodel,
@@ -438,12 +442,12 @@ class OpenMMSimulation:
         return modeller
 
     def write_pdb(self, pdb: app.PDBFile, modeller: app.Modeller):
-        # for convenience, create "top_1ps.pdb" of the raw peptide, as it is saved in the dcd.
+        # for convenience, create "top.pdb" of the raw peptide, as it is saved in the dcd.
         # this is helpful for analysis scripts which rely on it down the line
         pdb.writeFile(
             modeller.getTopology(),
             modeller.getPositions(),
-            open(os.path.join(self.output_dir, "top_1ps.pdb"), "w"),
+            open(os.path.join(self.output_dir, "top.pdb"), "w"),
         )
         # If there are water molecules in the topology file, then save an additional topology
         # file excluding those water molecules
@@ -457,7 +461,7 @@ class OpenMMSimulation:
             )
             del modeller_copy
 
-    def create_system(self, pdb: app.PDBFile):
+    def create_system(self, modeller: app.Modeller):
         """
         # TODO: research which of these methods is best
         nonbondedMethod - The cutoff method to use for nonbonded interactions.
@@ -465,9 +469,9 @@ class OpenMMSimulation:
         constraints (object=None) – Specifies which bonds and angles should be implemented with constraints.
                                     Allowed values are None, HBonds, AllBonds, or HAngles.
         """
-        print(f"System size: {pdb.topology.getNumAtoms()}")
+        print(f"System size: {modeller.topology.getNumAtoms()}")
         return self.force_field.createSystem(
-            pdb.topology,
+            modeller.topology,
             nonbondedMethod=cutoff_method[self.systemargs.cutoffmethod],
             nonbondedCutoff=self.systemargs.nonbondedcutoff,
             # constraints = app.AllBonds,
@@ -498,7 +502,7 @@ class OpenMMSimulation:
             ).getPositions()
             print("Writing minimised geometry to PDB file")
             self.systemobjs.pdb.writeModel(
-                self.systemobjs.pdb.topology,
+                self.systemobjs.modeller.topology,
                 positions,
                 open(os.path.join(self.output_dir, "minimised.pdb"), "w"),
             )
@@ -516,7 +520,7 @@ class OpenMMSimulation:
             "Precision": self.systemargs.precision,
         }
 
-        unit_cell_dims = self.systemobjs.pdb.getTopology().getUnitCellDimensions()
+        unit_cell_dims = self.systemobjs.modeller.getTopology().getUnitCellDimensions()
         if self.systemargs.periodic:
             print(f"Unit cell dimensions: {unit_cell_dims}, Cutoff distance: {self.systemargs.nonbondedcutoff}.")
 
@@ -548,7 +552,7 @@ class OpenMMSimulation:
         )
         # Create simulation and set initial positions
         simulation = app.Simulation(
-            self.systemobjs.pdb.topology,
+            self.systemobjs.modeller.topology,
             self.systemobjs.system,
             integrator,
             openmm.Platform.getPlatformByName("CUDA"),
@@ -556,7 +560,7 @@ class OpenMMSimulation:
         )
 
         # Specify the initial positions to be the positions that were loaded from the PDB file
-        simulation.context.setPositions(self.systemobjs.pdb.positions)
+        simulation.context.setPositions(self.systemobjs.modeller.positions)
         if self.systemargs.resume:
             with open(os.path.join(self.output_dir, self.CHECKPOINT_FN), "rb") as f:
                 simulation.context.loadCheckpoint(f.read())

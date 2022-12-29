@@ -1,15 +1,9 @@
 from Experiment import Experiment
 
-exp_list = []
-CVs = {'PCA': None, 'TICA': None, 'DMD': None, 'VAMP': None}
+exp = Experiment(
+    location="/home/dominic/PycharmProjects/CV_learning/exp/outputs/chignolin/desres/DESRES-Trajectory_CLN025-0-protein/CLN025-0-protein",
+    features='dihedrals')
 
-for exp in exp_list:
-    print(f"Doing {exp}.")
-    # load exp
-    experiment = Experiment(location=exp, )
-
-    # compute CVs
-    for CV in CVs.items():
-        print(f"- Doing {CV[0]}")
-        # do something
-        # save CV to disk
+exp.implied_timescale_analysis(max_lag='200ns', increment=5)
+#exp.compute_cv('TICA', lagtime=)
+#exp.free_energy_plot(features=['TICA0', 'TICA1'], feature_nicknames=['TICA0', 'TICA1'])

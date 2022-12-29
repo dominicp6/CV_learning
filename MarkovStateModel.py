@@ -257,8 +257,8 @@ class MSM:
         return ax
 
     def plot_timescales(self, show: bool = True, ax=None):
-        fig, ax = init_plot("MSM State Timescales", "state", f"timescale (x{self.timestep})", ax=ax)
-        ax.plot(self.number_of_states-1, self.msm.timescales() * self.timestep)
+        fig, ax = init_plot("MSM State Timescales", "state", f"timescale ({self.timestep.unit})", ax=ax)
+        ax.plot(range(self.number_of_states-1), self.msm.timescales() * self.timestep)
         if show:
             plt.show()
 
