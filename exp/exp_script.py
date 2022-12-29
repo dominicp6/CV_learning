@@ -19,7 +19,6 @@ periodic = True
 
 # TODO: Saving water in trajectory
 # TODO: Check water model correctly saved to metadata?
-# TODO: Fix progress bar when resuming a previous experiment
 
 pr = '-pr' if periodic else ''
 subprocess.call(

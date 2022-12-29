@@ -7,6 +7,7 @@ from utils.openmm_utils import OpenMMSimulation
 
 
 if __name__ == "__main__":
+    # Set up a new simulation object
     MD_simulation = OpenMMSimulation()
 
     # Read and process commandline arguments

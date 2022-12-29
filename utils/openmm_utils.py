@@ -24,7 +24,7 @@ SystemArgs = namedtuple(
     "frictioncoeff solventpadding nonbondedcutoff cutoffmethod total_steps steps_per_save periodic gpu minimise precision watermodel",
 )
 
-SystemObjs = namedtuple("System_Objs", "pdb modeller peptide_indices system")
+SystemObjs = namedtuple("System_Objs", "pdb modeller system")
 
 SimulationProps = namedtuple("Simulation_Props", "integrator simulation properties")
 
@@ -71,40 +71,10 @@ def update_numerical_fields(old_dict: dict, update_dict: dict, fields: set[str])
     return update_dict
 
 
-# def fix_pdb(path_to_file):
-#     print("Creating PDBFixer...")
-#     fixer = PDBFixer(path_to_file)
-#     print("Finding missing residues...")
-#     fixer.findMissingResidues()
-#
-#     chains = list(fixer.topology.chains())
-#     keys = fixer.missingResidues.keys()
-#     for key in list(keys):
-#         chain = chains[key[0]]
-#         if key[1] == 0 or key[1] == len(list(chain.residues())):
-#             del fixer.missingResidues[key]
-#
-#     print("Finding nonstandard residues...")
-#     fixer.findNonstandardResidues()
-#     print("Replacing nonstandard residues...")
-#     fixer.replaceNonstandardResidues()
-#     print("Removing heterogens...")
-#     fixer.removeHeterogens(keepWater=True)
-#
-#     print("Finding missing atoms...")
-#     fixer.findMissingAtoms()
-#     print("Adding missing atoms...")
-#     fixer.addMissingAtoms()
-#     print("Adding missing hydrogens...")
-#     fixer.addMissingHydrogens(7)
-#     print("Writing PDB file...")
-#
-#     app.pdbfile.PDBFile.writeFile(
-#         fixer.topology,
-#         fixer.positions,
-#         open(f"{path_to_file[:-4]}_fixed.pdb", "w"),
-#         keepIds=True,
-#     )
+# def get_peptide_indices(self, pdb) -> list[int]:
+#     return [
+#         atom.index for atom in pdb.topology.atoms() if atom.residue.name != "HOH"
+#     ]
 
 
 def isnumber(s: str):
@@ -164,6 +134,11 @@ class OpenMMSimulation:
         self.force_field = None
 
     def parse_args(self):
+        """
+        Parse command line arguments.
+
+        :return: Dictionary of arguments
+        """
         parser = argparse.ArgumentParser(
             description="Production run for an equilibrated biomolecule."
         )
@@ -304,6 +279,9 @@ class OpenMMSimulation:
         return self.systemargs
 
     def check_args(self):
+        """
+        Check that the simulation arguments are valid.
+        """
         if self.systemargs.forcefield not in self.valid_ffs:
             print(
                 f"Invalid forcefield: {self.systemargs.forcefield}, must be {self.valid_ffs}"
@@ -345,7 +323,6 @@ class OpenMMSimulation:
         self.make_output_directory()
         print("[x] Made output dir")
         pdb = self.initialise_pdb()
-        peptide_indices = self.get_peptide_indices(pdb)
         print("[x] Initialised PDB")
         self.initialise_forcefield()
         print("[x] Initialised force field")
@@ -355,7 +332,7 @@ class OpenMMSimulation:
         system = self.create_system(modeller)
         print("Successfully created system")
 
-        self.systemobjs = SystemObjs(pdb, modeller, peptide_indices, system)
+        self.systemobjs = SystemObjs(pdb, modeller, system)
         return self.systemobjs
 
     def make_output_directory(self) -> str:
@@ -373,15 +350,31 @@ class OpenMMSimulation:
         return self.output_dir
 
     def save_simulation_metadata(self):
-        args_as_dict = stringify_named_tuple(self.systemargs)
+        """
+        Saves the simulation metadata to a JSON file.
+        If the simulation is being resumed, the metadata is loaded from the existing file and updated.
+        """
+        system_args_dict = stringify_named_tuple(self.systemargs)
+
+        # If resuming, load existing metadata and update
         if self.systemargs.resume:
             print('Updating metadata')
-            args_as_dict = self._update_existing_metadata(args_as_dict)
-        print(args_as_dict)
-        with open(os.path.join(self.output_dir, self.METADATA_FN), "w") as json_file:
-            json.dump(args_as_dict, json_file)
+            system_args_dict = self._update_metadata_file(system_args_dict)
+            # Cumulate duration and total_steps from previous runs
+            self.systemargs.duration = parse_quantity(system_args_dict['duration'])
+            self.systemargs.total_steps = int(self.systemargs.duration / self.systemargs.stepsize)
 
-    def _update_existing_metadata(self, metadata_update: dict) -> dict:
+        # Save metadata
+        print(system_args_dict)
+        with open(os.path.join(self.output_dir, self.METADATA_FN), "w") as json_file:
+            json.dump(system_args_dict, json_file)
+
+    def _update_metadata_file(self, metadata_update: dict) -> dict:
+        """
+        Updates the metadata file with the new metadata.
+        :param metadata_update: The new metadata to update the file with.
+        :return: The updated metadata.
+        """
         assert os.path.exists(
             os.path.join(self.output_dir, self.METADATA_FN)), "Cannot resume a simulation without metadata."
         with open(os.path.join(self.output_dir, self.METADATA_FN), "r") as json_file:
@@ -398,11 +391,6 @@ class OpenMMSimulation:
             pdb.topology.setPeriodicBoxVectors(None)
 
         return pdb
-
-    def get_peptide_indices(self, pdb) -> list[int]:
-        return [
-            atom.index for atom in pdb.topology.atoms() if atom.residue.name != "HOH"
-        ]
 
     def initialise_forcefield(self) -> app.ForceField:
         if self.systemargs.forcefield == "amber":  # Create AMBER system
@@ -463,7 +451,6 @@ class OpenMMSimulation:
 
     def create_system(self, modeller: app.Modeller):
         """
-        # TODO: research which of these methods is best
         nonbondedMethod - The cutoff method to use for nonbonded interactions.
         nonbondedCutoff - The cutoff distance to use for nonbonded interactions.
         constraints (object=None) – Specifies which bonds and angles should be implemented with constraints.
@@ -483,38 +470,45 @@ class OpenMMSimulation:
         print("[x] Initialised simulation")
         if self.systemargs.minimise:
             print("Running energy minimisation...")
-            # initial system energy
-            print("\ninitial system energy")
-            print(
-                self.simulationprops.simulation.context.getState(
-                    getEnergy=True
-                ).getPotentialEnergy()
-            )
-            self.simulationprops.simulation.minimizeEnergy()
-            print("\nafter minimization")
-            print(
-                self.simulationprops.simulation.context.getState(
-                    getEnergy=True
-                ).getPotentialEnergy()
-            )
-            positions = self.simulationprops.simulation.context.getState(
-                getPositions=True
-            ).getPositions()
-            print("Writing minimised geometry to PDB file")
-            self.systemobjs.pdb.writeModel(
-                self.systemobjs.modeller.topology,
-                positions,
-                open(os.path.join(self.output_dir, "minimised.pdb"), "w"),
-            )
+            self.minimise_system_energy()
             print("[x] Finished minimisation")
         self.simulationprops.simulation.context.setVelocitiesToTemperature(
             self.systemargs.temperature
         )
-        self.setup_reporters()
         self.save_simulation_metadata()
+        self.setup_reporters()
         print("Successfully setup simulation")
 
+    def minimise_system_energy(self):
+        # initial system energy
+        print("\ninitial system energy")
+        print(
+            self.simulationprops.simulation.context.getState(
+                getEnergy=True
+            ).getPotentialEnergy()
+        )
+        self.simulationprops.simulation.minimizeEnergy()
+        print("\nafter minimization")
+        print(
+            self.simulationprops.simulation.context.getState(
+                getEnergy=True
+            ).getPotentialEnergy()
+        )
+        positions = self.simulationprops.simulation.context.getState(
+            getPositions=True
+        ).getPositions()
+        print("Writing minimised geometry to PDB file")
+        self.systemobjs.pdb.writeModel(
+            self.systemobjs.modeller.topology,
+            positions,
+            open(os.path.join(self.output_dir, "minimised.pdb"), "w"),
+        )
+
     def initialise_simulation(self):
+        """
+        Initialise the periodic boundary conditions (optional), pressure (optional) and the integrator.
+        If resuming a simulation, then load simulation properties from the checkpoint file.
+        """
         properties = {
             "CudaDeviceIndex": self.systemargs.gpu,
             "Precision": self.systemargs.precision,
