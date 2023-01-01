@@ -22,7 +22,7 @@ from tqdm import tqdm
 
 from utils.openmm_utils import parse_quantity
 from utils.plotting_functions import init_plot, init_multiplot
-from utils.openmm_utils import round_format_unit
+from utils.openmm_utils import round_format_quantity
 from utils.plot_utils import my_draw_networkx_edge_labels
 
 
@@ -214,7 +214,7 @@ class MSM:
 
     def _add_edge(self, graph: nx.Graph, i: int, j: int, edge_labels: dict):
         transition_step = mfpt(self.msm.transition_matrix, target=j, origin=i, tau=self.lagstep)
-        transition_time = f"{round_format_unit(transition_step * self.timestep, 3)}"
+        transition_time = f"{round_format_quantity(transition_step * self.timestep, 3)}"
         graph.add_edge(i, j, weight=transition_step)
         edge_labels[(i, j)] = f"{self.msm.transition_matrix[i, j]:.3e} ({transition_time})"
 

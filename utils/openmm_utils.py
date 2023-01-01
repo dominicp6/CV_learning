@@ -1,6 +1,7 @@
 import os
 import argparse
 import sys
+import warnings
 from collections import namedtuple
 from datetime import datetime
 import json
@@ -14,14 +15,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as tkr
 import seaborn as sns
-# from pdbfixer import PDBFixer
 
 from utils.trajectory_utils import clean_and_align_trajectory
 
 SystemArgs = namedtuple(
     "System_Args",
-    "pdb forcefield resume duration savefreq stepsize temperature pressure "
-    "frictioncoeff solventpadding nonbondedcutoff cutoffmethod total_steps steps_per_save periodic gpu minimise precision watermodel",
+    "pdb forcefield resume plumed duration savefreq stepsize temperature pressure "
+    "frictioncoeff solventpadding nonbondedcutoff cutoffmethod total_steps steps_per_save "
+    "periodic gpu minimise precision watermodel seed",
 )
 
 SystemObjs = namedtuple("System_Objs", "pdb modeller system")
@@ -96,8 +97,8 @@ def parse_quantity(s: str):
         raise ValueError(f"Invalid quantity: {s}")
 
 
-def round_format_unit(unit: unit.Unit, significant_figures: int):
-    return f'{round(unit._value, significant_figures)} {unit.unit.get_symbol()}'
+def round_format_quantity(quantity: unit.Quantity, significant_figures: int):
+    return f'{round(quantity._value, significant_figures)} {quantity.unit.get_symbol()}'
 
 
 def time_to_iteration_conversion(time: str, duration: unit.Unit, num_frames: int):
@@ -152,6 +153,11 @@ class OpenMMSimulation:
             "-r",
             "--resume",
             help="(dir) Resume simulation from an existing production directory",
+        )
+        parser.add_argument(
+            "-PLUMED",
+            "--PLUMED",
+            help="(PLUMED Script) Path to PLUMED script for enhanced sampling",
         )
         # The CUDA Platform supports parallelizing a simulation across multiple GPUs. \
         # To do that, set this to a comma separated list of values. For example, -g 0,1.
@@ -225,11 +231,13 @@ class OpenMMSimulation:
         parser.add_argument(
             "-w", "--water", default="", help=f"(str) The water model: {self.valid_wms}"
         )
+        parser.add_argument("-seed", "--seed", default=0, help="(int) Random seed")
         args = parser.parse_args()
         pdb = args.pdb
         forcefield = args.ff.lower()
         precision = args.pr.lower()
         resume = args.resume
+        plumed = args.PLUMED
         gpu = args.gpu
         duration = parse_quantity(args.duration)
         savefreq = parse_quantity(args.savefreq)
@@ -246,6 +254,7 @@ class OpenMMSimulation:
         periodic = args.periodic
         minimise = args.minimise
         watermodel = args.water
+        seed = args.seed
 
         if not periodic:
             assert cutoffmethod in [
@@ -258,6 +267,7 @@ class OpenMMSimulation:
             pdb,
             forcefield,
             resume,
+            plumed,
             duration,
             savefreq,
             stepsize,
@@ -274,6 +284,7 @@ class OpenMMSimulation:
             minimise,
             precision,
             watermodel,
+            seed,
         )
 
         return self.systemargs
@@ -300,6 +311,10 @@ class OpenMMSimulation:
                 f"Production directory to resume is not a directory: {self.systemargs.resume}"
             )
             quit()
+
+        if self.systemargs.resume is not None and self.systemargs.plumed is not None:
+            warnings.warn("Using a PLUMED script with a resumed simulation is experimental and may be buggy.",
+                          UserWarning)
 
         if self.systemargs.resume:
             resume_contains = os.listdir(self.systemargs.resume)
@@ -457,12 +472,18 @@ class OpenMMSimulation:
                                     Allowed values are None, HBonds, AllBonds, or HAngles.
         """
         print(f"System size: {modeller.topology.getNumAtoms()}")
-        return self.force_field.createSystem(
+        system = self.force_field.createSystem(
             modeller.topology,
             nonbondedMethod=cutoff_method[self.systemargs.cutoffmethod],
             nonbondedCutoff=self.systemargs.nonbondedcutoff,
             # constraints = app.AllBonds,
         )
+        if self.systemargs.plumed:
+            with open(self.systemargs.plumed, "r") as plumed_file:
+                plumed_script = plumed_file.read()
+            system.addForce(PlumedForce(plumed_script))
+
+        return system
 
     def setup_simulation(self):
         print("Setting up simulation...")
@@ -544,6 +565,7 @@ class OpenMMSimulation:
             self.systemargs.frictioncoeff,
             self.systemargs.stepsize,
         )
+        integrator.setRandomNumberSeed(self.systemargs.seed)
         # Create simulation and set initial positions
         simulation = app.Simulation(
             self.systemobjs.modeller.topology,
