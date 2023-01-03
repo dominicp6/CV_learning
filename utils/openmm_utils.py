@@ -11,6 +11,7 @@ import numpy as np
 import openmm
 import openmm.app as app
 import openmm.unit as unit
+from openmmplumed import PlumedForce
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as tkr
@@ -22,7 +23,7 @@ SystemArgs = namedtuple(
     "System_Args",
     "pdb forcefield resume plumed duration savefreq stepsize temperature pressure "
     "frictioncoeff solventpadding nonbondedcutoff cutoffmethod total_steps steps_per_save "
-    "periodic gpu minimise precision watermodel seed",
+    "periodic gpu minimise precision watermodel seed name dir",
 )
 
 SystemObjs = namedtuple("System_Objs", "pdb modeller system")
@@ -134,12 +135,10 @@ class OpenMMSimulation:
         self.output_dir = None
         self.force_field = None
 
-    def parse_args(self):
-        """
-        Parse command line arguments.
+        # Parser
+        self.parser = self.init_parser()
 
-        :return: Dictionary of arguments
-        """
+    def init_parser(self):
         parser = argparse.ArgumentParser(
             description="Production run for an equilibrated biomolecule."
         )
@@ -147,8 +146,8 @@ class OpenMMSimulation:
             "pdb",
             help="(file) PDB file describing topology and positions.",
         )
-        parser.add_argument("ff", help=f"Forcefield/Potential to use: {self.valid_ffs}")
-        parser.add_argument("pr", help=f"Precision to use: {self.valid_precision}")
+        parser.add_argument("forcefield", help=f"Forcefield/Potential to use: {self.valid_ffs}")
+        parser.add_argument("precision", help=f"Precision to use: {self.valid_precision}")
         parser.add_argument(
             "-r",
             "--resume",
@@ -214,7 +213,8 @@ class OpenMMSimulation:
             "-cm",
             "--cutoffmethod",
             default="PME",
-            help="The non-bonded cutoff method to use, one of 'NoCutoff', 'CutoffNonPeriodic', 'CutoffPeriodic', 'Ewald', or 'PME'",
+            help="The non-bonded cutoff method to use, one of 'NoCutoff', 'CutoffNonPeriodic', "
+                 "'CutoffPeriodic', 'Ewald', or 'PME'",
         )
         parser.add_argument(
             "-pr",
@@ -232,29 +232,55 @@ class OpenMMSimulation:
             "-w", "--water", default="", help=f"(str) The water model: {self.valid_wms}"
         )
         parser.add_argument("-seed", "--seed", default=0, help="(int) Random seed")
-        args = parser.parse_args()
-        pdb = args.pdb
-        forcefield = args.ff.lower()
-        precision = args.pr.lower()
-        resume = args.resume
-        plumed = args.PLUMED
-        gpu = args.gpu
+        parser.add_argument("-name", "--name", default=None, help="(str) Name of simulation. "
+                                                                  "If not provided, a name will be generated.")
+        parser.add_argument("-dir", "--directory", default=None, help="(str) Directory to save simulation in. "
+                                                                      "If not provided, a directory will be generated.")
+
+        return parser
+
+    def check_argument_dict(self, argdict: dict):
+        required_args = [
+            action.dest
+            for action in self.parser._actions
+            if action.required
+        ]
+        for key in required_args:
+            assert key in argdict, f"Missing required argument: {key}"
+        for key in argdict.keys():
+            assert key in self.parser._option_string_actions.keys(), f"Invalid argument: {key}"
+
+    def generate_executable_command(self, argdict: dict):
+        """
+        Generate the command to run the simulation
+        :param argdict: Dictionary of arguments
+        :return: String of command
+        """
+        self.check_argument_dict(argdict)
+
+        # Generate command
+        command = "python3 -m openmmtools.run "
+        for key, value in argdict.items():
+            flag = self.parser._option_string_actions[key].option_strings[0]
+            command += f"{flag} {value} "
+        return command
+
+    def parse_args(self):
+        """
+        Parse command line arguments.
+
+        :return: Dictionary of arguments
+        """
+        args = self.parser.parse_args()
         duration = parse_quantity(args.duration)
         savefreq = parse_quantity(args.savefreq)
         stepsize = parse_quantity(args.stepsize)
-        temperature = parse_quantity(args.temperature)
-        pressure = parse_quantity(args.pressure) if args.pressure else None
         frictioncoeff = parse_quantity(args.frictioncoeff)
-        solventpadding = parse_quantity(args.solventpadding)
-        nonbondedcutoff = parse_quantity(args.nonbondedcutoff)
-        cutoffmethod = args.cutoffmethod
         frictioncoeff = frictioncoeff._value / frictioncoeff.unit
+        cutoffmethod = args.cutoffmethod
         total_steps = int(duration / stepsize)
         steps_per_save = int(savefreq / stepsize)
         periodic = args.periodic
-        minimise = args.minimise
-        watermodel = args.water
-        seed = args.seed
 
         if not periodic:
             assert cutoffmethod in [
@@ -264,27 +290,29 @@ class OpenMMSimulation:
                f"({cutoffmethod}). Please change the cutoff method to either 'NoCutoff' or 'CutoffNonPeriodic'."
 
         self.systemargs = SystemArgs(
-            pdb,
-            forcefield,
-            resume,
-            plumed,
+            args.pdb,
+            args.forcefield.lower(),
+            args.resume,
+            args.PLUMED,
             duration,
             savefreq,
             stepsize,
-            temperature,
-            pressure,
+            parse_quantity(args.temperature),
+            parse_quantity(args.pressure) if args.pressure else None,
             frictioncoeff,
-            solventpadding,
-            nonbondedcutoff,
+            parse_quantity(args.solventpadding),
+            parse_quantity(args.nonbondedcutoff),
             cutoffmethod,
             total_steps,
             steps_per_save,
             periodic,
-            gpu,
-            minimise,
-            precision,
-            watermodel,
-            seed,
+            args.gpu,
+            args.minimise,
+            args.precision.lower(),
+            args.water,
+            args.seed,
+            args.name,
+            args.dir,
         )
 
         return self.systemargs
@@ -357,8 +385,19 @@ class OpenMMSimulation:
         else:
             # Make output directory
             pdb_filename = os.path.splitext(os.path.basename(self.systemargs.pdb))[0]
-            output_dir = f"production_{pdb_filename}_{self.systemargs.forcefield}_{datetime.now().strftime('%H%M%S_%d%m%y')}"
-            output_dir = os.path.join("../exp/outputs", output_dir)
+            exp_name_auto = f"production_{pdb_filename}_" \
+                            f"{self.systemargs.forcefield}_{datetime.now().strftime('%H%M%S_%d%m%y')}"
+
+            output_dir = None
+            if not self.systemargs.name and not self.systemargs.dir:
+                output_dir = os.path.join("../exp/outputs", exp_name_auto)
+            elif self.systemargs.name and not self.systemargs.dir:
+                output_dir = os.path.join("../exp/outputs", self.systemargs.name)
+            elif self.systemargs.dir and not self.systemargs.name:
+                output_dir = os.path.join(self.systemargs.dir, exp_name_auto)
+            elif self.systemargs.dir and self.systemargs.name:
+                output_dir = os.path.join(self.systemargs.dir, self.systemargs.name)
+
             os.makedirs(output_dir)
 
         self.output_dir = output_dir

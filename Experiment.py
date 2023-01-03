@@ -19,9 +19,9 @@ import pyemma
 import deeptime
 import numpy as np
 import matplotlib.pyplot as plt
-import sklearn
+from sklearn.decomposition import PCA
 import openmm.unit as unit
-import nglview as nv
+#import nglview as nv
 from deeptime.util.validation import implied_timescales
 from deeptime.plots import plot_implied_timescales
 from tqdm import tqdm
@@ -38,6 +38,7 @@ from utils.experiment_utils import write_metadynamics_line, get_metadata_file, l
 from utils.general_utils import supress_stdout, assert_kwarg, remove_nans
 from utils.openmm_utils import parse_quantity, time_to_iteration_conversion
 from utils.plotting_functions import init_plot, init_multiplot, save_fig
+from utils.trajectory_utils import get_dihedral_atom_and_residue_indices
 
 # TODO: fix free energy plot to make it work correctly with collective variables
 # TODO: think what is happening to water molecules in the trajectory
@@ -76,6 +77,13 @@ def get_feature_ids_from_names(
         feature_ids.append(all_features.index(feature))
 
     return feature_ids
+
+
+def get_feature_mask(feature: str, featurizer: pyemma.coordinates.featurizer):
+    all_features = featurizer.describe()
+    feature_mask = np.zeros(len(all_features), dtype=int)
+    feature_mask[all_features.index(feature)] = 1
+    return feature_mask
 
 
 class Experiment:
@@ -290,7 +298,7 @@ class Experiment:
         # Trajectory is either featurized or unfeaturized (cartesian coords), depending on object initialisation.
         trajectory = self.get_trajectory()
         if CV == "PCA":
-            self.CVs[CV] = sklearn.decomposition.PCA(n_components=dim, **kwargs).fit(trajectory[::stride])
+            self.CVs[CV] = PCA(n_components=dim, **kwargs).fit(trajectory[::stride])
         elif CV == "TICA":
             assert_kwarg(kwargs, kwarg="lagtime", obj_name=CV)
             # other kwargs: epsilon, var_cutoff, scaling, observable_transform
@@ -330,13 +338,14 @@ class Experiment:
             **self.KRE_DEFAULTS,
         )
 
-    def _get_cv(self, CV, dim):
+    def _get_cv(self, CV, dim, stride: int = 1):
         #  TODO: fix models other than TICA
         assert CV in self.CVs.keys(), f"Method '{CV}' not in {self.CVs.keys()}"
+        trajectory = self.get_trajectory()
         if self.CVs[CV] is None:
             raise ValueError(f"{CV} CVs not computed.")
         if CV in ["PCA", "VAMP"]:
-            return self.CVs[CV].get_output()[0][:, dim]
+            return self.CVs[CV].transform(trajectory[::stride])[:, dim]
         elif CV == "TICA":
             return self.CVs[CV].instantaneous_coefficients[dim]
         elif CV == "DM":
@@ -356,32 +365,72 @@ class Experiment:
     def _lstsq_traj_with_features(self, traj: np.array) -> np.array:
         feat_traj = self.featurized_traj
         feat_traj = np.c_[np.ones(self.num_frames), feat_traj]
+        print(feat_traj.shape, traj.shape)
         coeffs, err, _, _ = np.linalg.lstsq(feat_traj, traj, rcond=None)
 
         return coeffs[1:]
 
     def create_plumed_metadynamics_script(
             self,
-            CV: str,
+            CVs: list[str],
             filename: str = None,
             gaussian_height: float = 0.2,
             gaussian_pace: int = 1000,
     ):
+        """
+        Creates a PLUMED script for metadynamics in the current directory.
+
+        :param CVs: List of CVs to use for metadynamics.
+        CV format is CV:dim (dim optional), examples: TICA:0, DM:3, PHI 0 ALA 2, PSI 0 ALA 2.
+        :param filename: Name of the PLUMED script. If None, defaults to 'plumed.dat'.
+        :param gaussian_height: Height of the Gaussian bias.
+        :param gaussian_pace: Number of steps between depositing each Gaussian bias.
+        """
         if not self.features_provided:
             raise ValueError(
                 "Cannot create PLUMED metadynamics script for an unfeaturized trajectory. "
                 "Try reinitializing Experiment object with features defined."
             )
         else:
-            assert CV in self.CVs.keys(), f"Method '{CV}' not in {self.CVs.keys()}"
+            # TODO: we need a check to work out if features are sin-cos encoded or not
+
+            # Check if CVs are valid
+            atom_features = [False for _ in range(len(CVs))]
+            for idx, CV in enumerate(CVs):
+                stripped_CV = CV.split(':')[0]
+                atom_features[idx] = False
+                if stripped_CV in self.CVs.keys():
+                    atom_features[idx] = False
+                elif stripped_CV in self.featurizer.describe():
+                    atom_features[idx] = True
+                else:
+                    raise ValueError(f"CV '{stripped_CV}' not in {self.CVs.keys()} or {self.featurizer.describe()}")
+
+                if not atom_features[idx] and self.CVs[stripped_CV] is None:
+                    raise ValueError(f"{stripped_CV} CVs not computed.")
+
+            # Create PLUMED script
             f = open("./plumed.py" if filename is None else f"./{filename}.py", "w")
             output = 'plumed_script="RESTART ' + "\\n\\"
             f.write(output + "\n")
             print(output)
+
+            # TODO: extend for multiple CVs
+            CV = CVs[0].split(':')[0]
+            dim = int(CVs[0].split(':')[1])
+
+            print("featurizer", self.featurizer)
+            print('wow')
+            for label in self.featurizer.describe():
+                print('pow')
+                atoms_indices = get_dihedral_atom_and_residue_indices(self.traj, label)
+                print("label", label, atoms_indices)
             dihedral_features = Dihedrals(
+                topology=self.topology,
                 dihedrals=self.featurizer.active_features,
                 offsets=self.feature_means,
-                coefficients=self.feature_eigenvector(CV, dim=0),
+                coefficients=self.feature_eigenvector(CV, dim=dim)
+                if not atom_features[0] else get_feature_mask(CV, self.featurizer),
             )
             dihedral_features.write_torsion_labels(file=f)
             dihedral_features.write_transform_labels(file=f)

@@ -6,10 +6,13 @@
 """
 
 import re
+from typing import Optional
 
 import numpy as np
-
+import mdtraj as md
 from pyemma.coordinates.data.featurization.angles import DihedralFeature
+
+from utils.trajectory_utils import get_dihedral_atom_and_residue_indices
 
 
 class Dihedral:
@@ -17,7 +20,7 @@ class Dihedral:
         self,
         atom_indices: list[int],
         residue_indices: np.array,
-        sincos: str,
+        sincos: Optional[str],
         offset: float,
         idx: int,
     ):
@@ -31,23 +34,26 @@ class Dihedral:
         self.dihedral_label = str(self.sincos) + "_" + self.dihedral_label_trig_removed
 
     def torsion_label(self):
+        # TODO: fix for when no sincos
         # plumed is 1 indexed and mdtraj is not
-        if self.sincos == "sin":  # only output one torsion label per sin-cos pair
+        #if self.sincos == "sin":  # only output one torsion label per sin-cos pair
             return (
                 "TORSION ATOMS="
                 + ",".join(str(i + 1) for i in self.atom_indices)
                 + f" LABEL={self.dihedral_label_trig_removed} \\n\\"
             )
-        else:
-            return None
+        #else:
+        #    return None
 
     def transformer_label(self):
+        # TODO: fix for when no sincos
         return f"MATHEVAL ARG={self.dihedral_label_trig_removed} FUNC={self.sincos}(x)-{self.offset} LABEL={self.dihedral_label} PERIODIC=NO \\n\\"
 
 
 class Dihedrals:
     def __init__(
         self,
+        topology: md.Topology,
         dihedrals: list[DihedralFeature],
         offsets: np.array,
         coefficients: np.array,
@@ -56,23 +62,29 @@ class Dihedrals:
         self.dihedral_list = []
         self.dihedral_labels = []
         self.coefficients = [str(v) for v in coefficients]
+        self.topology = topology
         self.initialise_lists(dihedrals[0], offsets)
 
     def parse_dihedral_string(self, txt: str):
         num_seq = np.array([int(s) for s in re.findall(r"\b\d+\b", txt)])
+        print("dihedral string:", txt)
+        print("numbers in string:", num_seq)
         if "SIN" in txt and "COS" not in txt:
             sincos = "sin"
         elif "COS" in txt and "SIN" not in txt:
             sincos = "cos"
         else:
-            raise ValueError(f"Expected either SIN or COS in string, got {txt}.")
-        atom_indices = num_seq[1::2]
-        residue_indices = num_seq[0::2]
+            sincos = None
+            # raise ValueError(f"Expected either SIN or COS in string, got {txt}.")
+        atom_indices, residue_indices, angle_type = get_dihedral_atom_and_residue_indices(self.topology, txt)
+        print("atom indices:", atom_indices)
+        print("residue indices:", residue_indices)
         return atom_indices, residue_indices, sincos
 
     # todo: inconsistent naming
     def initialise_lists(self, dihedrals: DihedralFeature, offsets: list[float]):
         dihedral_labels = dihedrals.describe()
+        print("dihedral labels:", dihedral_labels)
         assert len(dihedral_labels) == len(
             offsets
         ), "The number of offets must equal the number of dihedrals."

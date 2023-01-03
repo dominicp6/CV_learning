@@ -16,6 +16,42 @@ import scipy.interpolate as interpolate
 from scipy.ndimage import gaussian_filter1d
 
 
+def count_files(directory: str, suffix: str) -> int:
+    """
+    Count the number of files with a given suffix in a directory.
+
+    :param directory: The directory to search.
+    :param suffix: The suffix to search for.
+    :return: The number of files with that suffix in the directory.
+    """
+    # List all files in the directory
+    files = os.listdir(directory)
+
+    # Select only the files with the given suffix
+    files_with_suffix = [f for f in files if f.endswith(f'.{suffix}')]
+
+    # Return the number of files with the suffix
+    return len(files_with_suffix)
+
+
+def list_files(directory: str, suffix: str) -> list[str]:
+    """
+    Lists the files with a given suffix in a directory.
+
+    :param directory: The directory to search.
+    :param suffix: The suffix to search for.
+    :return: The list of files with that suffix in the directory.
+    """
+    # List all files in the directory
+    files = os.listdir(directory)
+
+    # Select only the files with the given suffix
+    files_with_suffix = [f for f in files if f.endswith(f'.{suffix}')]
+
+    # Return the files
+    return files_with_suffix
+
+
 def assert_kwarg(kwargs: dict, kwarg: str, obj_name: str):
     try:
         assert kwargs[kwarg] is not None
