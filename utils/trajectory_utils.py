@@ -2,29 +2,6 @@ import os
 from typing import Optional
 
 import mdtraj as md
-from mdtraj.geometry.dihedral import indices_psi, indices_phi
-
-
-def get_dihedral_atom_and_residue_indices(top, dihedral_string):
-    # Split the dihedral string into its parts
-    parts = dihedral_string.split()
-    angle_type = parts[0]
-    # TODO: fix for sincos type strings
-    res1_index = int(parts[1])
-    res2_index = int(parts[3])
-
-    # Compute the dihedral angle using mdtraj
-    if angle_type == "PHI":
-        indices = indices_phi(top)
-    elif angle_type == "PSI":
-        indices = indices_psi(top)
-    else:
-        raise ValueError(f"Invalid dihedral angle type: {angle_type}")
-
-    # Find the indices of the atoms involved in the dihedral angle
-    atoms = indices[res1_index, :]
-
-    return atoms, [res1_index, res2_index], angle_type
 
 
 def merge_dcd_trajectories_in_dir(

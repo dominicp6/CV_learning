@@ -8,36 +8,38 @@
 
 import os
 import subprocess
-from time import time
-from collections import defaultdict
+import time as time
+#from collections import defaultdict
+from typing import Optional, Union
 from datetime import timedelta
 
-import numpy as np
-import matplotlib.pyplot as plt
-import openmm.unit as unit
-from tqdm import tqdm
-from scipy.interpolate import griddata
+#import numpy as np
+#import matplotlib.pyplot as plt
+#import openmm.unit as unit
+#from tqdm import tqdm
+#from scipy.interpolate import griddata
 
+from Experiment import Experiment
 from utils.openmm_utils import OpenMMSimulation
 from utils.general_utils import count_files, list_files
 
-from Experiment import parse_quantity
+#from Experiment import parse_quantity
 
 
-def read_HILLS_file(file, skipinitial=3):
-    HILLS_arr = []
-    HILLS_strs = []
-    HILLS_header = []
-    with open(file, "r") as f:
-        for idx, line in enumerate(f.readlines()):
-            if idx < skipinitial:
-                HILLS_header.append(line)
-            else:
-                entries = [float(segment.strip()) for segment in line.split()]
-                HILLS_arr.append(entries)
-                HILLS_strs.append(line)
-
-    return np.array(HILLS_arr), HILLS_strs, HILLS_header
+# def read_HILLS_file(file, skipinitial=3):
+#     HILLS_arr = []
+#     HILLS_strs = []
+#     HILLS_header = []
+#     with open(file, "r") as f:
+#         for idx, line in enumerate(f.readlines()):
+#             if idx < skipinitial:
+#                 HILLS_header.append(line)
+#             else:
+#                 entries = [float(segment.strip()) for segment in line.split()]
+#                 HILLS_arr.append(entries)
+#                 HILLS_strs.append(line)
+#
+#     return np.array(HILLS_arr), HILLS_strs, HILLS_header
 
 
 class EnhancedSamplingExperiments:
@@ -45,14 +47,16 @@ class EnhancedSamplingExperiments:
             self,
             output_dir: str,
             unbiased_exp: str,
-            cv_method: str,
+            CVs: list[str],
             starting_structures: str,
             number_of_repeats: int,
             # critical_points: list[list[float]],
             # points_on_convergence_plot: list,
             # fe_grid_size: int,
             openmm_parameters: dict,
+            meta_d_parameters: dict,
             # simulations_complete: bool = False,
+            features: Optional[Union[dict, str]] = None,
     ):
 
         self.initialised = False
@@ -61,7 +65,9 @@ class EnhancedSamplingExperiments:
         # self.fe_vals_computed = False
         # self.fe_vals_summarised = False
 
-        self.cv_method = cv_method
+        if features is None:
+            print("Warning: No features specified. Using default cartesian features. (Not recommended)")
+        self.exp = Experiment(location=unbiased_exp, features=features)
         self.number_of_repeats = number_of_repeats
         self.starting_structures = starting_structures
         self.num_starting_structures = count_files(self.starting_structures, 'pdb')
@@ -69,6 +75,7 @@ class EnhancedSamplingExperiments:
         # self.fe_grid_size = fe_grid_size
 
         self.output_dir = output_dir
+        self.CVs = CVs
         # change working directory
         os.chdir(self.output_dir)
         # self.critical_points = critical_points
@@ -77,7 +84,8 @@ class EnhancedSamplingExperiments:
         # ]
         OpenMMSimulation().check_argument_dict(openmm_parameters)
         self.openmm_params = openmm_parameters
-        self.openmm_params["dir"] = self.output_dir
+        self.openmm_params["--directory"] = self.output_dir
+        self.meta_d_params = meta_d_parameters
 
         self.eta = None
         self.exps_ran = 0
@@ -119,15 +127,21 @@ class EnhancedSamplingExperiments:
 
     # 1)
     def initialise_hills_and_PLUMED(self):
-        # for method in self.methods:
         for pdb_file in list_files(self.starting_structures, 'pdb'):
             for repeat in range(self.number_of_repeats):
-                exp_name = self.get_exp_name(self.cv_method, pdb_file, repeat)
+                exp_name = self.get_exp_name(self.CVs, pdb_file, repeat)
                 open(f"{self.output_dir}/HILLS_{exp_name}", "w")
                 open(f"{self.output_dir}/COLVAR_{exp_name}", "w")
-                with open(f"{self.output_dir}/{exp_name}_PLUMED.txt", "w") as f:
-                    PLUMED_string = self.PLUMED(self.cv_method, repeat)
-                    f.write(PLUMED_string)
+                self.exp.create_plumed_metadynamics_script(CVs=self.CVs,
+                                                           filename=f"{self.output_dir}/plumed_{exp_name}.dat",
+                                                           exp_name=exp_name,
+                                                           gaussian_height=self.meta_d_params['gaussian_height'],
+                                                           gaussian_pace=self.meta_d_params['gaussian_pace'],
+                                                           well_tempered=self.meta_d_params['well_tempered'],
+                                                           bias_factor=self.meta_d_params['bias_factor'],
+                                                           temperature=self.meta_d_params['temperature'],
+                                                           sigma_list=self.meta_d_params['sigma_list'],
+                                                           normalised=self.meta_d_params['normalised'],)
         self.initialised = True
 
     # 2)
@@ -139,12 +153,12 @@ class EnhancedSamplingExperiments:
             for repeat in range(self.number_of_repeats):
                 self.progress_logger(ti, tf)
                 ti = time.time()
-                exp_name = self.get_exp_name(self.cv_method, pdb_file, repeat)
-                self.openmm_params["seed"] = repeat
-                self.openmm_params["name"] = exp_name
-                self.openmm_params["PLUMED"] = f"{self.output_dir}/{exp_name}_PLUMED.txt"
+                exp_name = self.get_exp_name(self.CVs, pdb_file, repeat)
+                self.openmm_params["--seed"] = repeat
+                self.openmm_params["--name"] = exp_name
+                self.openmm_params["--PLUMED"] = f"{self.output_dir}/{exp_name}_PLUMED.txt"
                 subprocess.call(OpenMMSimulation().generate_executable_command(self.openmm_params),
-                                shell=True, stdout=subprocess.DEVNULL)
+                                shell=True)
                 # subprocess.call(
                 #     f"mdconvert {self.output_dir}/{exp_name}/trajectory.dcd -o {self.output_dir}/{exp_name}/trajectory.xtc",
                 #     shell=True,
@@ -155,8 +169,9 @@ class EnhancedSamplingExperiments:
         self.simulations_complete = True
 
     @staticmethod
-    def get_exp_name(cv_method: str, pdb_file: str, repeat: int):
-        return f"{cv_method}_{pdb_file[:-4]}_repeat_{repeat}"
+    def get_exp_name(CVs: list[str], pdb_file: str, repeat: int):
+        CVs = [cv.replace(" ", "_") for cv in CVs]
+        return f"{'_'.join(CVs)}_{pdb_file[:-4]}_repeat_{repeat}"
 
     # 3)
     # def run_analysis(self):
@@ -345,106 +360,106 @@ class EnhancedSamplingExperiments:
     #     plt.show()
     #     # TODO: save plot
 
-    def PLUMED(self, method: str, repeat: int):
-        prefix = f"RESTART \n\
-TORSION ATOMS=5,7,9,15 LABEL=5_7_9_15 \n\
-TORSION ATOMS=7,9,15,17 LABEL=7_9_15_17 \n\
-TORSION ATOMS=2,5,7,9 LABEL=2_5_7_9 \n\
-TORSION ATOMS=9,15,17,19 LABEL=9_15_17_19 \n\
-MATHEVAL ARG=5_7_9_15 FUNC=cos(x)--0.018100298941135406 LABEL=cos_5_7_9_15 PERIODIC=NO \n\
-MATHEVAL ARG=5_7_9_15 FUNC=sin(x)--0.7750170826911926 LABEL=sin_5_7_9_15 PERIODIC=NO \n\
-MATHEVAL ARG=7_9_15_17 FUNC=cos(x)-0.11455978453159332 LABEL=cos_7_9_15_17 PERIODIC=NO \n\
-MATHEVAL ARG=7_9_15_17 FUNC=sin(x)-0.5776147246360779 LABEL=sin_7_9_15_17 PERIODIC=NO \n\
-MATHEVAL ARG=2_5_7_9 FUNC=cos(x)--0.9876720905303955 LABEL=cos_2_5_7_9 PERIODIC=NO \n\
-MATHEVAL ARG=2_5_7_9 FUNC=sin(x)--0.0018686018884181976 LABEL=sin_2_5_7_9 PERIODIC=NO \n\
-MATHEVAL ARG=9_15_17_19 FUNC=cos(x)--0.9883973598480225 LABEL=cos_9_15_17_19 PERIODIC=NO \n\
-MATHEVAL ARG=9_15_17_19 FUNC=sin(x)--0.004300905857235193 LABEL=sin_9_15_17_19 PERIODIC=NO \n\
-"
-        if method == "TICA":
-            return (
-                    prefix
-                    + f"COMBINE LABEL=TICA_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=0.34064384071734,0.92966430112022,0.0161593856858182,-0.026732070218086,0.124684184179194,-0.054801458726274,-0.0042902856957667,0.0119406643788291 PERIODIC=NO \n\
-METAD ARG=TICA_0 SIGMA=0.1 HEIGHT=1.2 BIASFACTOR=8 TEMP=300 FILE=HILLS_TICA{repeat} PACE=500 LABEL=metad \n\
-PRINT ARG=TICA_0,metad.bias STRIDE={self.stride} FILE=COLVAR_TICA{repeat} \n"
-            )
-        elif method == "PCA":
-            return (
-                    prefix
-                    + f"COMBINE LABEL=PCA_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=-0.5233437836034278,0.14863186024723976,-0.8323598980242899,-0.10014450000828198,2.8964499312778003e-05,0.03174602265864699,-0.00016289310381917277,0.01265291173498418 PERIODIC=NO \n\
-METAD ARG=PCA_0 SIGMA=0.1 HEIGHT=1.2 BIASFACTOR=8 TEMP=300 FILE=HILLS_PCA{repeat} PACE=500 LABEL=metad \n\
-PRINT ARG=PCA_0,metad.bias STRIDE={self.stride} FILE=COLVAR_PCA{repeat} \n"
-            )
-        elif method == "VAMP":
-            return (
-                    prefix
-                    + f"COMBINE LABEL=VAMP_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=0.339774471816777,0.930293229662793,0.01633229139417103,-0.0254281296973736,0.1227416304730610,-0.0544009983962363,-0.00522093244037105,0.01192673508843518 PERIODIC=NO \n\
-METAD ARG=VAMP_0 SIGMA=0.1 HEIGHT=1.2 BIASFACTOR=8 TEMP=300 FILE=HILLS_VAMP{repeat} PACE=500 LABEL=metad \n\
-PRINT ARG=VAMP_0,metad.bias STRIDE={self.stride} FILE=COLVAR_VAMP{repeat} \n"
-            )
-        elif method == "DMAP":
-            return (
-                    prefix
-                    + f"COMBINE LABEL=DMAP_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=-0.341182884310888,-0.93079433857876,-0.015982887915466,0.026217148677748,-0.11462269900346,0.0539851347818776,-0.0088330576090523,-0.01194011395056 PERIODIC=NO \n\
-METAD ARG=DMAP_0 SIGMA=0.1 HEIGHT=1.2 BIASFACTOR=8 TEMP=300 FILE=HILLS_DMAP{repeat} PACE=500 LABEL=metad \n\
-PRINT ARG=DMAP_0,metad.bias STRIDE={self.stride} FILE=COLVAR_DMAP{repeat} \n"
-            )
+#     def PLUMED(self, method: str, repeat: int):
+#         prefix = f"RESTART \n\
+# TORSION ATOMS=5,7,9,15 LABEL=5_7_9_15 \n\
+# TORSION ATOMS=7,9,15,17 LABEL=7_9_15_17 \n\
+# TORSION ATOMS=2,5,7,9 LABEL=2_5_7_9 \n\
+# TORSION ATOMS=9,15,17,19 LABEL=9_15_17_19 \n\
+# MATHEVAL ARG=5_7_9_15 FUNC=cos(x)--0.018100298941135406 LABEL=cos_5_7_9_15 PERIODIC=NO \n\
+# MATHEVAL ARG=5_7_9_15 FUNC=sin(x)--0.7750170826911926 LABEL=sin_5_7_9_15 PERIODIC=NO \n\
+# MATHEVAL ARG=7_9_15_17 FUNC=cos(x)-0.11455978453159332 LABEL=cos_7_9_15_17 PERIODIC=NO \n\
+# MATHEVAL ARG=7_9_15_17 FUNC=sin(x)-0.5776147246360779 LABEL=sin_7_9_15_17 PERIODIC=NO \n\
+# MATHEVAL ARG=2_5_7_9 FUNC=cos(x)--0.9876720905303955 LABEL=cos_2_5_7_9 PERIODIC=NO \n\
+# MATHEVAL ARG=2_5_7_9 FUNC=sin(x)--0.0018686018884181976 LABEL=sin_2_5_7_9 PERIODIC=NO \n\
+# MATHEVAL ARG=9_15_17_19 FUNC=cos(x)--0.9883973598480225 LABEL=cos_9_15_17_19 PERIODIC=NO \n\
+# MATHEVAL ARG=9_15_17_19 FUNC=sin(x)--0.004300905857235193 LABEL=sin_9_15_17_19 PERIODIC=NO \n\
+# "
+#         if method == "TICA":
+#             return (
+#                     prefix
+#                     + f"COMBINE LABEL=TICA_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=0.34064384071734,0.92966430112022,0.0161593856858182,-0.026732070218086,0.124684184179194,-0.054801458726274,-0.0042902856957667,0.0119406643788291 PERIODIC=NO \n\
+# METAD ARG=TICA_0 SIGMA=0.1 HEIGHT=1.2 BIASFACTOR=8 TEMP=300 FILE=HILLS_TICA{repeat} PACE=500 LABEL=metad \n\
+# PRINT ARG=TICA_0,metad.bias STRIDE={self.stride} FILE=COLVAR_TICA{repeat} \n"
+#             )
+#         elif method == "PCA":
+#             return (
+#                     prefix
+#                     + f"COMBINE LABEL=PCA_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=-0.5233437836034278,0.14863186024723976,-0.8323598980242899,-0.10014450000828198,2.8964499312778003e-05,0.03174602265864699,-0.00016289310381917277,0.01265291173498418 PERIODIC=NO \n\
+# METAD ARG=PCA_0 SIGMA=0.1 HEIGHT=1.2 BIASFACTOR=8 TEMP=300 FILE=HILLS_PCA{repeat} PACE=500 LABEL=metad \n\
+# PRINT ARG=PCA_0,metad.bias STRIDE={self.stride} FILE=COLVAR_PCA{repeat} \n"
+#             )
+#         elif method == "VAMP":
+#             return (
+#                     prefix
+#                     + f"COMBINE LABEL=VAMP_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=0.339774471816777,0.930293229662793,0.01633229139417103,-0.0254281296973736,0.1227416304730610,-0.0544009983962363,-0.00522093244037105,0.01192673508843518 PERIODIC=NO \n\
+# METAD ARG=VAMP_0 SIGMA=0.1 HEIGHT=1.2 BIASFACTOR=8 TEMP=300 FILE=HILLS_VAMP{repeat} PACE=500 LABEL=metad \n\
+# PRINT ARG=VAMP_0,metad.bias STRIDE={self.stride} FILE=COLVAR_VAMP{repeat} \n"
+#             )
+#         elif method == "DMAP":
+#             return (
+#                     prefix
+#                     + f"COMBINE LABEL=DMAP_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=-0.341182884310888,-0.93079433857876,-0.015982887915466,0.026217148677748,-0.11462269900346,0.0539851347818776,-0.0088330576090523,-0.01194011395056 PERIODIC=NO \n\
+# METAD ARG=DMAP_0 SIGMA=0.1 HEIGHT=1.2 BIASFACTOR=8 TEMP=300 FILE=HILLS_DMAP{repeat} PACE=500 LABEL=metad \n\
+# PRINT ARG=DMAP_0,metad.bias STRIDE={self.stride} FILE=COLVAR_DMAP{repeat} \n"
+            #)
 
-    def REWEIGHT_PLUMED(self, method: str, repeat: int, fraction: float):
-        prefix = f"RESTART \n\
-TORSION ATOMS=5,7,9,15 LABEL=5_7_9_15 \n\
-TORSION ATOMS=7,9,15,17 LABEL=7_9_15_17 \n\
-TORSION ATOMS=2,5,7,9 LABEL=2_5_7_9 \n\
-TORSION ATOMS=9,15,17,19 LABEL=9_15_17_19 \n\
-MATHEVAL ARG=5_7_9_15 FUNC=cos(x)--0.018100298941135406 LABEL=cos_5_7_9_15 PERIODIC=NO \n\
-MATHEVAL ARG=5_7_9_15 FUNC=sin(x)--0.7750170826911926 LABEL=sin_5_7_9_15 PERIODIC=NO \n\
-MATHEVAL ARG=7_9_15_17 FUNC=cos(x)-0.11455978453159332 LABEL=cos_7_9_15_17 PERIODIC=NO \n\
-MATHEVAL ARG=7_9_15_17 FUNC=sin(x)-0.5776147246360779 LABEL=sin_7_9_15_17 PERIODIC=NO \n\
-MATHEVAL ARG=2_5_7_9 FUNC=cos(x)--0.9876720905303955 LABEL=cos_2_5_7_9 PERIODIC=NO \n\
-MATHEVAL ARG=2_5_7_9 FUNC=sin(x)--0.0018686018884181976 LABEL=sin_2_5_7_9 PERIODIC=NO \n\
-MATHEVAL ARG=9_15_17_19 FUNC=cos(x)--0.9883973598480225 LABEL=cos_9_15_17_19 PERIODIC=NO \n\
-MATHEVAL ARG=9_15_17_19 FUNC=sin(x)--0.004300905857235193 LABEL=sin_9_15_17_19 PERIODIC=NO \n\
-"
-        if method == "TICA":
-            return (
-                    prefix
-                    + f"COMBINE LABEL=TICA_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=0.34064384071734,0.92966430112022,0.0161593856858182,-0.026732070218086,0.124684184179194,-0.054801458726274,-0.0042902856957667,0.0119406643788291 PERIODIC=NO \n\
-METAD ARG=TICA_0 SIGMA=0.1 HEIGHT=0.0 FILE=HILLS_TICA{repeat}_{fraction} PACE=10000000 LABEL=metad RESTART=YES \n\
-PRINT ARG=TICA_0,metad.bias STRIDE=1 FILE=COLVAR_TICA{repeat}_{fraction}_REWEIGHT \n\
-as: REWEIGHT_BIAS ARG=TICA_0  TEMP=300 \n\
-hh: HISTOGRAM ARG=5_7_9_15,7_9_15_17 GRID_MIN=-3.14,-3.14 GRID_MAX=3.14,3.14 GRID_BIN={self.fe_grid_size},{self.fe_grid_size} BANDWIDTH=0.05,0.05 LOGWEIGHTS=as \n\
-ff: CONVERT_TO_FES GRID=hh TEMP=300 \n\
-DUMPGRID GRID=ff FILE=ff_TICA{repeat}_{fraction}.dat"
-            )
-        elif method == "PCA":
-            return (
-                    prefix
-                    + f"COMBINE LABEL=PCA_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=-0.5233437836034278,0.14863186024723976,-0.8323598980242899,-0.10014450000828198,2.8964499312778003e-05,0.03174602265864699,-0.00016289310381917277,0.01265291173498418 PERIODIC=NO \n\
-METAD ARG=PCA_0 SIGMA=0.1 HEIGHT=0.0 FILE=HILLS_PCA{repeat}_{fraction} PACE=10000000 LABEL=metad RESTART=YES \n\
-PRINT ARG=PCA_0,metad.bias STRIDE=1 FILE=COLVAR_PCA{repeat}_{fraction}_REWEIGHT \n\
-as: REWEIGHT_BIAS ARG=PCA_0 TEMP=300 \n\
-hh: HISTOGRAM ARG=5_7_9_15,7_9_15_17 GRID_MIN=-3.14,-3.14 GRID_MAX=3.14,3.14 GRID_BIN={self.fe_grid_size},{self.fe_grid_size} BANDWIDTH=0.05,0.05 LOGWEIGHTS=as \n\
-ff: CONVERT_TO_FES GRID=hh TEMP=300 \n\
-DUMPGRID GRID=ff FILE=ff_PCA{repeat}_{fraction}.dat"
-            )
-        elif method == "VAMP":
-            return (
-                    prefix
-                    + f"COMBINE LABEL=VAMP_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=0.339774471816777,0.930293229662793,0.01633229139417103,-0.0254281296973736,0.1227416304730610,-0.0544009983962363,-0.00522093244037105,0.01192673508843518 PERIODIC=NO \n\
-METAD ARG=VAMP_0 SIGMA=0.1 HEIGHT=0.0 FILE=HILLS_VAMP{repeat}_{fraction} PACE=10000000 LABEL=metad RESTART=YES \n\
-PRINT ARG=VAMP_0,metad.bias STRIDE=1 FILE=COLVAR_VAMP{repeat}_{fraction}_REWEIGHT \n\
-as: REWEIGHT_BIAS ARG=VAMP_0 TEMP=300 \n\
-hh: HISTOGRAM ARG=5_7_9_15,7_9_15_17 GRID_MIN=-3.14,-3.14 GRID_MAX=3.14,3.14 GRID_BIN={self.fe_grid_size},{self.fe_grid_size} BANDWIDTH=0.05,0.05 LOGWEIGHTS=as \n\
-ff: CONVERT_TO_FES GRID=hh TEMP=300 \n\
-DUMPGRID GRID=ff FILE=ff_VAMP{repeat}_{fraction}.dat"
-            )
-        elif method == "DMAP":
-            return (
-                    prefix
-                    + f"COMBINE LABEL=DMAP_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=-0.341182884310888,-0.93079433857876,-0.015982887915466,0.026217148677748,-0.11462269900346,0.0539851347818776,-0.0088330576090523,-0.01194011395056 PERIODIC=NO \n\
-METAD ARG=DMAP_0 SIGMA=0.1 HEIGHT=0.0 FILE=HILLS_DMAP{repeat}_{fraction} PACE=10000000 LABEL=metad RESTART=YES \n\
-PRINT ARG=DMAP_0,metad.bias STRIDE=1 FILE=COLVAR_DMAP{repeat}_{fraction}_REWEIGHT \n\
-as: REWEIGHT_BIAS ARG=DMAP_0 TEMP=300 \n\
-hh: HISTOGRAM ARG=5_7_9_15,7_9_15_17 GRID_MIN=-3.14,-3.14 GRID_MAX=3.14,3.14 GRID_BIN={self.fe_grid_size},{self.fe_grid_size} BANDWIDTH=0.05,0.05 LOGWEIGHTS=as \n\
-ff: CONVERT_TO_FES GRID=hh TEMP=300 \n\
-DUMPGRID GRID=ff FILE=ff_DMAP{repeat}_{fraction}.dat"
-            )
+#     def REWEIGHT_PLUMED(self, method: str, repeat: int, fraction: float):
+#         prefix = f"RESTART \n\
+# TORSION ATOMS=5,7,9,15 LABEL=5_7_9_15 \n\
+# TORSION ATOMS=7,9,15,17 LABEL=7_9_15_17 \n\
+# TORSION ATOMS=2,5,7,9 LABEL=2_5_7_9 \n\
+# TORSION ATOMS=9,15,17,19 LABEL=9_15_17_19 \n\
+# MATHEVAL ARG=5_7_9_15 FUNC=cos(x)--0.018100298941135406 LABEL=cos_5_7_9_15 PERIODIC=NO \n\
+# MATHEVAL ARG=5_7_9_15 FUNC=sin(x)--0.7750170826911926 LABEL=sin_5_7_9_15 PERIODIC=NO \n\
+# MATHEVAL ARG=7_9_15_17 FUNC=cos(x)-0.11455978453159332 LABEL=cos_7_9_15_17 PERIODIC=NO \n\
+# MATHEVAL ARG=7_9_15_17 FUNC=sin(x)-0.5776147246360779 LABEL=sin_7_9_15_17 PERIODIC=NO \n\
+# MATHEVAL ARG=2_5_7_9 FUNC=cos(x)--0.9876720905303955 LABEL=cos_2_5_7_9 PERIODIC=NO \n\
+# MATHEVAL ARG=2_5_7_9 FUNC=sin(x)--0.0018686018884181976 LABEL=sin_2_5_7_9 PERIODIC=NO \n\
+# MATHEVAL ARG=9_15_17_19 FUNC=cos(x)--0.9883973598480225 LABEL=cos_9_15_17_19 PERIODIC=NO \n\
+# MATHEVAL ARG=9_15_17_19 FUNC=sin(x)--0.004300905857235193 LABEL=sin_9_15_17_19 PERIODIC=NO \n\
+# "
+#         if method == "TICA":
+#             return (
+#                     prefix
+#                     + f"COMBINE LABEL=TICA_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=0.34064384071734,0.92966430112022,0.0161593856858182,-0.026732070218086,0.124684184179194,-0.054801458726274,-0.0042902856957667,0.0119406643788291 PERIODIC=NO \n\
+# METAD ARG=TICA_0 SIGMA=0.1 HEIGHT=0.0 FILE=HILLS_TICA{repeat}_{fraction} PACE=10000000 LABEL=metad RESTART=YES \n\
+# PRINT ARG=TICA_0,metad.bias STRIDE=1 FILE=COLVAR_TICA{repeat}_{fraction}_REWEIGHT \n\
+# as: REWEIGHT_BIAS ARG=TICA_0  TEMP=300 \n\
+# hh: HISTOGRAM ARG=5_7_9_15,7_9_15_17 GRID_MIN=-3.14,-3.14 GRID_MAX=3.14,3.14 GRID_BIN={self.fe_grid_size},{self.fe_grid_size} BANDWIDTH=0.05,0.05 LOGWEIGHTS=as \n\
+# ff: CONVERT_TO_FES GRID=hh TEMP=300 \n\
+# DUMPGRID GRID=ff FILE=ff_TICA{repeat}_{fraction}.dat"
+#             )
+#         elif method == "PCA":
+#             return (
+#                     prefix
+#                     + f"COMBINE LABEL=PCA_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=-0.5233437836034278,0.14863186024723976,-0.8323598980242899,-0.10014450000828198,2.8964499312778003e-05,0.03174602265864699,-0.00016289310381917277,0.01265291173498418 PERIODIC=NO \n\
+# METAD ARG=PCA_0 SIGMA=0.1 HEIGHT=0.0 FILE=HILLS_PCA{repeat}_{fraction} PACE=10000000 LABEL=metad RESTART=YES \n\
+# PRINT ARG=PCA_0,metad.bias STRIDE=1 FILE=COLVAR_PCA{repeat}_{fraction}_REWEIGHT \n\
+# as: REWEIGHT_BIAS ARG=PCA_0 TEMP=300 \n\
+# hh: HISTOGRAM ARG=5_7_9_15,7_9_15_17 GRID_MIN=-3.14,-3.14 GRID_MAX=3.14,3.14 GRID_BIN={self.fe_grid_size},{self.fe_grid_size} BANDWIDTH=0.05,0.05 LOGWEIGHTS=as \n\
+# ff: CONVERT_TO_FES GRID=hh TEMP=300 \n\
+# DUMPGRID GRID=ff FILE=ff_PCA{repeat}_{fraction}.dat"
+#             )
+#         elif method == "VAMP":
+#             return (
+#                     prefix
+#                     + f"COMBINE LABEL=VAMP_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=0.339774471816777,0.930293229662793,0.01633229139417103,-0.0254281296973736,0.1227416304730610,-0.0544009983962363,-0.00522093244037105,0.01192673508843518 PERIODIC=NO \n\
+# METAD ARG=VAMP_0 SIGMA=0.1 HEIGHT=0.0 FILE=HILLS_VAMP{repeat}_{fraction} PACE=10000000 LABEL=metad RESTART=YES \n\
+# PRINT ARG=VAMP_0,metad.bias STRIDE=1 FILE=COLVAR_VAMP{repeat}_{fraction}_REWEIGHT \n\
+# as: REWEIGHT_BIAS ARG=VAMP_0 TEMP=300 \n\
+# hh: HISTOGRAM ARG=5_7_9_15,7_9_15_17 GRID_MIN=-3.14,-3.14 GRID_MAX=3.14,3.14 GRID_BIN={self.fe_grid_size},{self.fe_grid_size} BANDWIDTH=0.05,0.05 LOGWEIGHTS=as \n\
+# ff: CONVERT_TO_FES GRID=hh TEMP=300 \n\
+# DUMPGRID GRID=ff FILE=ff_VAMP{repeat}_{fraction}.dat"
+#             )
+#         elif method == "DMAP":
+#             return (
+#                     prefix
+#                     + f"COMBINE LABEL=DMAP_0 ARG=cos_5_7_9_15,sin_5_7_9_15,cos_7_9_15_17,sin_7_9_15_17,cos_2_5_7_9,sin_2_5_7_9,cos_9_15_17_19,sin_9_15_17_19 COEFFICIENTS=-0.341182884310888,-0.93079433857876,-0.015982887915466,0.026217148677748,-0.11462269900346,0.0539851347818776,-0.0088330576090523,-0.01194011395056 PERIODIC=NO \n\
+# METAD ARG=DMAP_0 SIGMA=0.1 HEIGHT=0.0 FILE=HILLS_DMAP{repeat}_{fraction} PACE=10000000 LABEL=metad RESTART=YES \n\
+# PRINT ARG=DMAP_0,metad.bias STRIDE=1 FILE=COLVAR_DMAP{repeat}_{fraction}_REWEIGHT \n\
+# as: REWEIGHT_BIAS ARG=DMAP_0 TEMP=300 \n\
+# hh: HISTOGRAM ARG=5_7_9_15,7_9_15_17 GRID_MIN=-3.14,-3.14 GRID_MAX=3.14,3.14 GRID_BIN={self.fe_grid_size},{self.fe_grid_size} BANDWIDTH=0.05,0.05 LOGWEIGHTS=as \n\
+# ff: CONVERT_TO_FES GRID=hh TEMP=300 \n\
+# DUMPGRID GRID=ff FILE=ff_DMAP{repeat}_{fraction}.dat"
+#             )

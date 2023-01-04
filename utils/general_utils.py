@@ -8,12 +8,21 @@
 import os
 import contextlib
 import psutil
-from typing import Optional, Callable
+from typing import Optional, Callable, Union, TextIO
 
 import numpy as np
 import numpy.typing as npt
 import scipy.interpolate as interpolate
 from scipy.ndimage import gaussian_filter1d
+
+
+def print_file_contents(file: Union[TextIO, str]):
+    if isinstance(file, str):
+        with open(file, 'r') as f:
+            print(f.read())
+
+    else:
+        print(file.read())
 
 
 def count_files(directory: str, suffix: str) -> int:

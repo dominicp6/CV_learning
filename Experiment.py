@@ -21,7 +21,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 import openmm.unit as unit
-#import nglview as nv
+# import nglview as nv
 from deeptime.util.validation import implied_timescales
 from deeptime.plots import plot_implied_timescales
 from tqdm import tqdm
@@ -35,10 +35,10 @@ from utils.diffusion_utils import free_energy_estimate_2D
 import mdfeature.features as feat
 from utils.plot_utils import voronoi_plot_2d
 from utils.experiment_utils import write_metadynamics_line, get_metadata_file, load_pdb, load_trajectory
-from utils.general_utils import supress_stdout, assert_kwarg, remove_nans
+from utils.general_utils import supress_stdout, assert_kwarg, remove_nans, print_file_contents
 from utils.openmm_utils import parse_quantity, time_to_iteration_conversion
 from utils.plotting_functions import init_plot, init_multiplot, save_fig
-from utils.trajectory_utils import get_dihedral_atom_and_residue_indices
+
 
 # TODO: fix free energy plot to make it work correctly with collective variables
 # TODO: think what is happening to water molecules in the trajectory
@@ -339,15 +339,12 @@ class Experiment:
         )
 
     def _get_cv(self, CV, dim, stride: int = 1):
-        #  TODO: fix models other than TICA
         assert CV in self.CVs.keys(), f"Method '{CV}' not in {self.CVs.keys()}"
         trajectory = self.get_trajectory()
         if self.CVs[CV] is None:
             raise ValueError(f"{CV} CVs not computed.")
-        if CV in ["PCA", "VAMP"]:
+        if CV in ["PCA", "TICA", "VAMP"]:
             return self.CVs[CV].transform(trajectory[::stride])[:, dim]
-        elif CV == "TICA":
-            return self.CVs[CV].instantaneous_coefficients[dim]
         elif CV == "DM":
             return self.CVs[CV].evecs[:, dim]
         else:
@@ -365,7 +362,6 @@ class Experiment:
     def _lstsq_traj_with_features(self, traj: np.array) -> np.array:
         feat_traj = self.featurized_traj
         feat_traj = np.c_[np.ones(self.num_frames), feat_traj]
-        print(feat_traj.shape, traj.shape)
         coeffs, err, _, _ = np.linalg.lstsq(feat_traj, traj, rcond=None)
 
         return coeffs[1:]
@@ -373,9 +369,15 @@ class Experiment:
     def create_plumed_metadynamics_script(
             self,
             CVs: list[str],
-            filename: str = None,
+            filename: str = 'plumed.dat',
+            exp_name: str = 'exp',
             gaussian_height: float = 0.2,
             gaussian_pace: int = 1000,
+            well_tempered: bool = True,
+            bias_factor: float = 8,
+            temperature: float = 300,
+            sigma_list: Optional[list[float]] = None,
+            normalised: bool = True,
     ):
         """
         Creates a PLUMED script for metadynamics in the current directory.
@@ -383,61 +385,66 @@ class Experiment:
         :param CVs: List of CVs to use for metadynamics.
         CV format is CV:dim (dim optional), examples: TICA:0, DM:3, PHI 0 ALA 2, PSI 0 ALA 2.
         :param filename: Name of the PLUMED script. If None, defaults to 'plumed.dat'.
+        :param exp_name: Name of the experiment. If None, defaults to 'exp'.
         :param gaussian_height: Height of the Gaussian bias.
         :param gaussian_pace: Number of steps between depositing each Gaussian bias.
+        :param well_tempered: Whether to use well-tempered metadynamics.
+        :param bias_factor: Bias factor for well-tempered metadynamics.
+        :param temperature: Temperature for well-tempered metadynamics.
+        :param sigma_list: List of sigmas for each CV. If None, defaults to 0.1 for each CV.
+        :param normalised:  Whether to use normalised CVs.
         """
+        if sigma_list is None:
+            sigma_list = [0.1]*len(CVs)
+        assert len(sigma_list) == len(CVs), f"Number of sigmas ({len(sigma_list)}) " \
+                                            f"must match number of CVs ({len(CVs)})."
         if not self.features_provided:
             raise ValueError(
                 "Cannot create PLUMED metadynamics script for an unfeaturized trajectory. "
                 "Try reinitializing Experiment object with features defined."
             )
         else:
-            # TODO: we need a check to work out if features are sin-cos encoded or not
-
             # Check if CVs are valid
-            atom_features = [False for _ in range(len(CVs))]
-            for idx, CV in enumerate(CVs):
-                stripped_CV = CV.split(':')[0]
-                atom_features[idx] = False
-                if stripped_CV in self.CVs.keys():
-                    atom_features[idx] = False
-                elif stripped_CV in self.featurizer.describe():
-                    atom_features[idx] = True
-                else:
-                    raise ValueError(f"CV '{stripped_CV}' not in {self.CVs.keys()} or {self.featurizer.describe()}")
+            atom_features = self._check_valid_cvs(CVs)
 
-                if not atom_features[idx] and self.CVs[stripped_CV] is None:
-                    raise ValueError(f"{stripped_CV} CVs not computed.")
-
-            # Create PLUMED script
-            f = open("./plumed.py" if filename is None else f"./{filename}.py", "w")
+            # Initialise PLUMED script
+            file_name = "./plumed.dat" if filename is None else f"{filename}"
+            f = open(file_name, "w")
             output = 'plumed_script="RESTART ' + "\\n\\"
             f.write(output + "\n")
-            print(output)
 
-            # TODO: extend for multiple CVs
-            CV = CVs[0].split(':')[0]
-            dim = int(CVs[0].split(':')[1])
-
-            print("featurizer", self.featurizer)
-            print('wow')
-            for label in self.featurizer.describe():
-                print('pow')
-                atoms_indices = get_dihedral_atom_and_residue_indices(self.traj, label)
-                print("label", label, atoms_indices)
+            # Initialise Dihedrals class
             dihedral_features = Dihedrals(
                 topology=self.topology,
-                dihedrals=self.featurizer.active_features,
+                dihedrals=self.featurizer.describe(),
                 offsets=self.feature_means,
-                coefficients=self.feature_eigenvector(CV, dim=dim)
-                if not atom_features[0] else get_feature_mask(CV, self.featurizer),
+                normalised=normalised,
             )
+
+            # Write PLUMED script
             dihedral_features.write_torsion_labels(file=f)
             dihedral_features.write_transform_labels(file=f)
-            dihedral_features.write_combined_label(CV=CV, file=f)
+
+            # Write CVs to PLUMED script
+            for idx, CV in enumerate(CVs):
+                cv_type, dim = None, None
+                if ":" in CV:
+                    cv_type = CV.split(':')[0]
+                    dim = int(CV.split(':')[1])
+                dihedral_features.write_combined_label(CV_name=CV,
+                                                       CV_coefficients=self.feature_eigenvector(cv_type, dim=dim)
+                                                       if not atom_features[idx] else get_feature_mask(CV,
+                                                                                                     self.featurizer),
+                                                       file=f)
+
+            # Write metadynamics command to PLUMED script
             write_metadynamics_line(
-                height=gaussian_height, pace=gaussian_pace, CV=CV, file=f
+                well_tempered=well_tempered, bias_factor=bias_factor, temperature=temperature, height=gaussian_height,
+                pace=gaussian_pace, sigma_list=sigma_list, CVs=CVs, exp_name=exp_name, file=f
             )
+
+            # Print script to terminal
+            print_file_contents(file_name)
 
     def get_feature_trajs_from_names(
             self,
@@ -583,6 +590,31 @@ class Experiment:
     def _check_feature_is_cv_feature(self, feature: str):
         regex = r"^(" + "|".join(self.CV_types) + r")\d+$"
         return re.match(regex, feature)
+
+    def _check_valid_cvs(self, CVs: list[str]):
+        """
+        Checks that the CVs provided are valid (either a traditional CV or a single feature)
+        """
+        atom_features = [False for _ in range(len(CVs))]
+        for idx, CV in enumerate(CVs):
+            if ":" in CV:
+                cv_type = CV.split(':')[0]
+            else:
+                cv_type = CV
+            atom_features[idx] = False
+            # Check if the CV is an atom feature (e.g. dihedral angle)
+            if cv_type in self.CVs.keys():
+                atom_features[idx] = False
+            elif cv_type in self.featurizer.describe():
+                atom_features[idx] = True
+            # If the CV is neither an atom feature nor a traditional CV (e.g. TICA, PCA, etc.), raise an error
+            else:
+                raise ValueError(f"CV '{cv_type}' not in {self.CVs.keys()} or {self.featurizer.describe()}")
+
+            if not atom_features[idx] and self.CVs[cv_type] is None:
+                raise ValueError(f"{cv_type} CVs not computed.")
+
+        return atom_features
 
     def _check_fes_arguments(
             self,

@@ -231,7 +231,7 @@ class OpenMMSimulation:
         parser.add_argument(
             "-w", "--water", default="", help=f"(str) The water model: {self.valid_wms}"
         )
-        parser.add_argument("-seed", "--seed", default=0, help="(int) Random seed")
+        parser.add_argument("-seed", "--seed", default='0', help="Random seed")
         parser.add_argument("-name", "--name", default=None, help="(str) Name of simulation. "
                                                                   "If not provided, a name will be generated.")
         parser.add_argument("-dir", "--directory", default=None, help="(str) Directory to save simulation in. "
@@ -240,15 +240,15 @@ class OpenMMSimulation:
         return parser
 
     def check_argument_dict(self, argdict: dict):
-        required_args = [
+        self.required_args = [
             action.dest
             for action in self.parser._actions
             if action.required
         ]
-        for key in required_args:
+        for key in self.required_args:
             assert key in argdict, f"Missing required argument: {key}"
         for key in argdict.keys():
-            assert key in self.parser._option_string_actions.keys(), f"Invalid argument: {key}"
+            assert key in self.parser._option_string_actions.keys() or key in self.required_args, f"Invalid argument: {key}"
 
     def generate_executable_command(self, argdict: dict):
         """
@@ -258,11 +258,47 @@ class OpenMMSimulation:
         """
         self.check_argument_dict(argdict)
 
+        def flag(arg_key):
+            return self.parser._option_string_actions[arg_key].option_strings[0]
+
         # Generate command
-        command = "python3 -m openmmtools.run "
-        for key, value in argdict.items():
-            flag = self.parser._option_string_actions[key].option_strings[0]
-            command += f"{flag} {value} "
+        command = "python ./home/dominic/PycharmProjects/CV_learning/run_openmm.py "
+        command += argdict['pdb'] + " "
+        command += argdict['forcefield'] + " "
+        try:
+            command += argdict['resume'] + " "
+        except KeyError:
+            pass
+        command += f"{flag('--PLUMED')} {argdict['--PLUMED']} "
+        try:
+            command += f"{flag('--gpu')} {argdict['--gpu']} "
+        except KeyError:
+            pass
+        command += f"{flag('--duration')} {argdict['--duration']} "
+        command += f"{flag('--savefreq')} {argdict['--savefreq']} "
+        command += f"{flag('--stepsize')} {argdict['--stepsize']} "
+        command += f"{flag('--temperature')} {argdict['--temperature']} "
+        command += f"{flag('--pressure')} {argdict['--pressure']} "
+        command += f"{flag('--frictioncoeff')} {argdict['--frictioncoeff']} "
+        command += f"{flag('--solventpadding')} {argdict['--solventpadding']} "
+        command += f"{flag('--nonbondedcutoff')} {argdict['--nonbondedcutoff']} "
+        command += f"{flag('--cutoffmethod')} {argdict['--cutoffmethod']} "
+        command += f"{flag('--periodic')} {argdict['--periodic']} "
+        # TODO: Fix minimisation
+        command += f"{flag('--minimise')} "
+        command += f"{flag('--water')} {argdict['--water']} "
+        command += f"{flag('--seed')} {argdict['--seed']} "
+        command += f"{flag('--name')} {argdict['--name']} "
+        command += f"{flag('--directory')} {argdict['--directory']} "
+
+        # for key, value in argdict.items():
+        #     if key not in self.required_args:
+        #         flag = self.parser._option_string_actions[key].option_strings[0]
+        #         command += f"{flag} {value} "
+        #     else:
+        #         command += f"{value} "
+
+        print(command)
         return command
 
     def parse_args(self):
@@ -310,9 +346,9 @@ class OpenMMSimulation:
             args.minimise,
             args.precision.lower(),
             args.water,
-            args.seed,
+            int(args.seed),
             args.name,
-            args.dir,
+            args.directory,
         )
 
         return self.systemargs
@@ -518,6 +554,7 @@ class OpenMMSimulation:
             # constraints = app.AllBonds,
         )
         if self.systemargs.plumed:
+            print("Adding PLUMED forces")
             with open(self.systemargs.plumed, "r") as plumed_file:
                 plumed_script = plumed_file.read()
             system.addForce(PlumedForce(plumed_script))
@@ -604,7 +641,7 @@ class OpenMMSimulation:
             self.systemargs.frictioncoeff,
             self.systemargs.stepsize,
         )
-        integrator.setRandomNumberSeed(self.systemargs.seed)
+        #integrator.setRandomNumberSeed(self.systemargs.seed)
         # Create simulation and set initial positions
         simulation = app.Simulation(
             self.systemobjs.modeller.topology,
@@ -691,8 +728,8 @@ class OpenMMSimulation:
 
     def post_processing_and_analysis(self):
         clean_and_align_trajectory(working_dir=self.output_dir,
-                                   traj_name='traj_1ps.dcd',
-                                   top_name='top_1ps.pdb',
+                                   traj_name='trajectory.dcd',
+                                   top_name='top.pdb',
                                    save_name='trajectory_processed')
         report = pd.read_csv(os.path.join(self.output_dir, self.STATE_DATA_FN))
         self.make_graphs(report)

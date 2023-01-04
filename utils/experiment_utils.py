@@ -58,23 +58,36 @@ def load_dihedral_trajectory(loc: str, dihedral_pickle_file: str) -> list:
     return dihedral_traj
 
 
-def write_metadynamics_line(height: float, pace: int, CV: str, file):
+def write_metadynamics_line(well_tempered: bool,
+                            bias_factor: float,
+                            temperature: float,
+                            height: float,
+                            pace: int,
+                            sigma_list: list[float],
+                            CVs: list[str],
+                            exp_name: str,
+                            file):
     arg_list = []
-    sigma_list = []
-    arg_list.append(f"{CV}_%d" % 0)
-    sigma_list.append(str(0.1))
+    sigma_list = [str(sigma) for sigma in sigma_list]
+    for CV in CVs:
+        arg_list.append(f"{CV}")
+
+    if well_tempered:
+        output = (
+                f"METAD ARG={','.join(arg_list)} SIGMA={','.join(sigma_list)} HEIGHT={height} "
+                f"BIASFACTOR={bias_factor} TEMP={temperature} FILE=HILLS_{exp_name} "
+                f"PACE={pace} LABEL=metad \\n\\"
+        )
+        file.writelines(output + "\n")
+    else:
+        output = (
+                f"METAD ARG={','.join(arg_list)} SIGMA={','.join(sigma_list)} HEIGHT={height} FILE=HILLS_{exp_name} "
+                f"PACE={pace} LABEL=metad \\n\\"
+        )
+        file.writelines(output + "\n")
+
     output = (
-            "METAD ARG=%s SIGMA=%s HEIGHT=%s FILE=HILLS PACE=%s LABEL=metad"
-            % (",".join(arg_list), ",".join(sigma_list), str(height), str(pace))
-            + " \\n\\"
+        f"PRINT ARG={','.join(arg_list)},metad.bias STRIDE={pace} FILE=COLVAR_{exp_name} \\n\\"
     )
-    print(output)
-    file.writelines(output + "\n")
-    output = (
-            "PRINT ARG=%s,metad.bias STRIDE=%s FILE=COLVAR"
-            % (",".join(arg_list), str(pace))
-            + " \\n"
-    )
-    print(output + '"')
     file.writelines(output + '"' + "\n")
     file.close()

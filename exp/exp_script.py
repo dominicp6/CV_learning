@@ -1,20 +1,24 @@
 import subprocess
 
 SCRIPT_DIR = '../..'
-DATA_DIR = '../data/chignolin'
-DURATION = '0.2222us'
-SAVE_FRQ = '200ps'
+DATA_DIR = '../data/alanine'
+DURATION = '50ns'
+SAVE_FRQ = '10ps'
 STEP_SIZE = '2fs'
 FRIC_COEFF = '1ps'
 PRECISION = 'mixed'
 WATER = 'tip3p'
-TEMP = '340K'
-PRESSURE = ''
-CUTOFF_DIST = '1nm'
+TEMP = '800K'
+PRESSURE = '1.0bar'
+CUTOFF_DIST = '0.80nm'
 SOLV_PADDING = '1nm'
 CUTOFF_METHOD = 'CutoffPeriodic'
-FORCE_FIELD = "charmm"
+FORCE_FIELD = "amber"
+SEED = "0"
+NAME = "50ns_NPT_800K_alanine"
+DIR = None
 periodic = True
+
 
 
 # TODO: Saving water in trajectory
@@ -22,7 +26,9 @@ periodic = True
 
 pr = '-pr' if periodic else ''
 subprocess.call(
-    f"python {SCRIPT_DIR}/run_openmm.py {DATA_DIR}/minimised.pdb -r /home/dominic/PycharmProjects/CV_learning/exp/exp/outputs/production_chignolin_desres_charmm_162251_161222 {FORCE_FIELD} {PRECISION} -d {DURATION} -c {FRIC_COEFF} -f {SAVE_FRQ} -s {STEP_SIZE} -t {TEMP} -sp {SOLV_PADDING} -nbc {CUTOFF_DIST} -cm {CUTOFF_METHOD} {pr} -w {WATER}",
+    f"python {SCRIPT_DIR}/run_openmm.py {DATA_DIR}/alanine-processed.pdb {FORCE_FIELD} {PRECISION} -d {DURATION} "
+    f"-c {FRIC_COEFF} -f {SAVE_FRQ} -s {STEP_SIZE} -t {TEMP} -sp {SOLV_PADDING} -nbc {CUTOFF_DIST} "
+    f"-cm {CUTOFF_METHOD} {pr} -m -w {WATER} -name {NAME}",
     shell=True,
 )
 

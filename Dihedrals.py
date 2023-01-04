@@ -11,111 +11,142 @@ from typing import Optional
 import numpy as np
 import mdtraj as md
 from pyemma.coordinates.data.featurization.angles import DihedralFeature
+from mdtraj.geometry.dihedral import indices_psi, indices_phi
 
-from utils.trajectory_utils import get_dihedral_atom_and_residue_indices
+
+def parse_dihedral_string(top, dihedral_string):
+
+    if "SIN" in dihedral_string and "COS" not in dihedral_string:
+        sincos = "sin"
+    elif "COS" in dihedral_string and "SIN" not in dihedral_string:
+        sincos = "cos"
+    else:
+        sincos = None
+
+    parts = dihedral_string.split()
+
+    if sincos is None:
+        angle_type = parts[0]
+        res1_index = int(parts[1])
+        res2_index = int(parts[3])
+    else:
+        raise NotImplementedError("SIN and COS dihedrals are not implemented yet")
+
+    # Compute the dihedral angle using mdtraj
+    if angle_type == "PHI":
+        indices = indices_phi(top)
+    elif angle_type == "PSI":
+        indices = indices_psi(top)
+    else:
+        raise ValueError(f"Invalid dihedral angle type: {angle_type}")
+
+    # Find the indices of the atoms involved in the dihedral angle
+    atom_indices = indices[res1_index, :]
+    res_indices = [res1_index, res2_index]
+
+    return sincos, atom_indices, res_indices, angle_type
 
 
 class Dihedral:
     def __init__(
         self,
         atom_indices: list[int],
+        angle_type: str,
         residue_indices: np.array,
         sincos: Optional[str],
         offset: float,
         idx: int,
     ):
         self.atom_indices = atom_indices
+        self.angle_type = angle_type
         self.residue_indices = residue_indices
         self.sincos = sincos
         self.offset = offset
         self.idx = idx
         # self.str_index = str(int(np.floor(self.idx/2)))
         self.dihedral_label_trig_removed = "_".join([str(s + 1) for s in atom_indices])
-        self.dihedral_label = str(self.sincos) + "_" + self.dihedral_label_trig_removed
+        if self.sincos:
+            self.dihedral_label = str(self.sincos) + "_" + self.angle_type + "_" + self.dihedral_label_trig_removed
+        else:
+            self.dihedral_label = self.angle_type + "_" + self.dihedral_label_trig_removed
 
     def torsion_label(self):
-        # TODO: fix for when no sincos
-        # plumed is 1 indexed and mdtraj is not
-        #if self.sincos == "sin":  # only output one torsion label per sin-cos pair
+        # only output one torsion label per sin-cos pair
+        if self.sincos == "sin" or self.sincos is None:
             return (
                 "TORSION ATOMS="
                 + ",".join(str(i + 1) for i in self.atom_indices)
                 + f" LABEL={self.dihedral_label_trig_removed} \\n\\"
             )
-        #else:
-        #    return None
+        else:
+            return None
 
     def transformer_label(self):
-        # TODO: fix for when no sincos
-        return f"MATHEVAL ARG={self.dihedral_label_trig_removed} FUNC={self.sincos}(x)-{self.offset} LABEL={self.dihedral_label} PERIODIC=NO \\n\\"
+        if self.sincos is not None:
+            return f"MATHEVAL ARG={self.dihedral_label_trig_removed} FUNC={self.sincos}(x)-{self.offset} LABEL={self.dihedral_label} PERIODIC=NO \\n\\"
+        else:
+            return f"MATHEVAL ARG={self.dihedral_label_trig_removed} FUNC=x-{self.offset} LABEL={self.dihedral_label} PERIODIC=NO \\n\\"
 
 
 class Dihedrals:
     def __init__(
         self,
         topology: md.Topology,
-        dihedrals: list[DihedralFeature],
+        dihedrals: list[str],
         offsets: np.array,
-        coefficients: np.array,
+        normalised: bool,
     ):
-        # TODO: init with coefficients
-        self.dihedral_list = []
+        self.dihedral_objs = []
         self.dihedral_labels = []
-        self.coefficients = [str(v) for v in coefficients]
+        self.normalised = normalised
+        self.offsets = offsets
         self.topology = topology
-        self.initialise_lists(dihedrals[0], offsets)
+        assert len(dihedrals) == len(offsets), \
+            f"The number of dihedrals and offsets must be equal, " \
+            f"but got lengths {len(dihedrals)} and {len(offsets)} respectively."
+        self.initialise_lists(dihedrals, offsets)
 
-    def parse_dihedral_string(self, txt: str):
-        num_seq = np.array([int(s) for s in re.findall(r"\b\d+\b", txt)])
-        print("dihedral string:", txt)
-        print("numbers in string:", num_seq)
-        if "SIN" in txt and "COS" not in txt:
-            sincos = "sin"
-        elif "COS" in txt and "SIN" not in txt:
-            sincos = "cos"
+    @staticmethod
+    def _set_coefficients(coefficients: np.array, normalised: bool):
+        if not normalised:
+            coefficients = [str(v) for v in coefficients]
         else:
-            sincos = None
-            # raise ValueError(f"Expected either SIN or COS in string, got {txt}.")
-        atom_indices, residue_indices, angle_type = get_dihedral_atom_and_residue_indices(self.topology, txt)
-        print("atom indices:", atom_indices)
-        print("residue indices:", residue_indices)
-        return atom_indices, residue_indices, sincos
+            # Normalised so sum of squares of coefficients is 1
+            coefficients = [str(v / np.sqrt(np.sum(coefficients ** 2))) for v in coefficients]
 
-    # todo: inconsistent naming
-    def initialise_lists(self, dihedrals: DihedralFeature, offsets: list[float]):
-        dihedral_labels = dihedrals.describe()
-        print("dihedral labels:", dihedral_labels)
-        assert len(dihedral_labels) == len(
-            offsets
-        ), "The number of offets must equal the number of dihedrals."
-        for idx, label in enumerate(dihedral_labels):
-            atom_indices, residue_indices, sincos = self.parse_dihedral_string(label)
+        return coefficients
+
+    def initialise_lists(self, dihedrals: list[str], offsets: list[float]):
+        for idx, label in enumerate(dihedrals):
+            sincos, atom_indices, residue_indices, angle_type = parse_dihedral_string(self.topology, label)
             dihedral = Dihedral(
-                atom_indices, residue_indices, sincos, offsets[idx], idx
+                atom_indices, angle_type, residue_indices, sincos, offsets[idx], idx
             )
-            self.dihedral_list.append(dihedral)
+            self.dihedral_objs.append(dihedral)
             self.dihedral_labels.append(dihedral.dihedral_label)
 
     def write_torsion_labels(self, file):
-        for dihedral in self.dihedral_list:
+        for dihedral in self.dihedral_objs:
             output = dihedral.torsion_label()
             if output is not None:
-                print(output)
                 file.writelines(output + "\n")
 
     def write_transform_labels(self, file):
-        for dihedral in self.dihedral_list:
+        for dihedral in self.dihedral_objs:
             output = dihedral.transformer_label()
-            print(output)
             file.writelines(output + "\n")
 
-    def write_combined_label(self, CV: str, file):
+    def write_combined_label(self, CV_name: str, CV_coefficients: np.array, file):
+        coefficients = self._set_coefficients(CV_coefficients, self.normalised)
+        assert len(coefficients) == len(self.dihedral_labels) == len(self.offsets), \
+            f"The number of coefficients must equal the number of dihedrals and offsets, " \
+            f"but got lengths {len(self.dihedral_labels)} and {len(self.offsets)} respectively."
+
         output = (
-            f"COMBINE LABEL={CV}_0"
+            f"COMBINE LABEL={CV_name}"
             + f" ARG={','.join(self.dihedral_labels)}"
-            + f" COEFFICIENTS={','.join(self.coefficients)}"
+            + f" COEFFICIENTS={','.join(coefficients)}"
             + " PERIODIC=NO"
             + " \\n\\"
         )
-        print(output)
         file.writelines(output + "\n")
