@@ -1,6 +1,6 @@
 from EnhancedSamplingExperiments import EnhancedSamplingExperiments
 
-openmm_parameters = {'--duration': '1ns',
+openmm_parameters = {'--duration': '50ns',
                      '--savefreq': '50ps',
                      '--stepsize': '2fs',
                      '--frictioncoeff': '1ps',
@@ -8,18 +8,18 @@ openmm_parameters = {'--duration': '1ns',
                      '--water': 'tip3p',
                      '--temperature': '300K',
                      '--pressure': '',
-                     '--nonbondedcutoff': '1nm',
+                     '--nonbondedcutoff': '0.8nm',
                      '--solventpadding': '1nm',
                      '--cutoffmethod': 'CutoffPeriodic',
                      '--periodic': True,
                      'forcefield': 'amber',
                      }
-meta_d_parameters = {'gaussian_height': 0.2,
-                     'gaussian_pace': 1000,
+meta_d_parameters = {'gaussian_height': 1.2,
+                     'gaussian_pace': 500,    # 500 * stepsize = 1ps
                      'well_tempered': True,
                      'bias_factor': 8,
                      'temperature': 300,
-                     'sigma_list': [0.1, 0.1],
+                     'sigma_list': [0.35, 0.35],
                      'normalised': True,
                      }
 

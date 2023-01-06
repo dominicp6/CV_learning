@@ -378,6 +378,7 @@ class Experiment:
             temperature: float = 300,
             sigma_list: Optional[list[float]] = None,
             normalised: bool = True,
+            print_to_terminal: bool = True,
     ):
         """
         Creates a PLUMED script for metadynamics in the current directory.
@@ -393,6 +394,7 @@ class Experiment:
         :param temperature: Temperature for well-tempered metadynamics.
         :param sigma_list: List of sigmas for each CV. If None, defaults to 0.1 for each CV.
         :param normalised:  Whether to use normalised CVs.
+        :param print_to_terminal: Whether to print the script to the terminal.
         """
         if sigma_list is None:
             sigma_list = [0.1]*len(CVs)
@@ -410,7 +412,7 @@ class Experiment:
             # Initialise PLUMED script
             file_name = "./plumed.dat" if filename is None else f"{filename}"
             f = open(file_name, "w")
-            output = 'plumed_script="RESTART ' + "\\n\\"
+            output = 'RESTART'
             f.write(output + "\n")
 
             # Initialise Dihedrals class
@@ -427,15 +429,13 @@ class Experiment:
 
             # Write CVs to PLUMED script
             for idx, CV in enumerate(CVs):
-                cv_type, dim = None, None
+                # Only write combined label for traditional CVs
                 if ":" in CV:
                     cv_type = CV.split(':')[0]
                     dim = int(CV.split(':')[1])
-                dihedral_features.write_combined_label(CV_name=CV,
-                                                       CV_coefficients=self.feature_eigenvector(cv_type, dim=dim)
-                                                       if not atom_features[idx] else get_feature_mask(CV,
-                                                                                                     self.featurizer),
-                                                       file=f)
+                    dihedral_features.write_combined_label(CV_name=CV,
+                                                           CV_coefficients=self.feature_eigenvector(cv_type, dim=dim),
+                                                           file=f)
 
             # Write metadynamics command to PLUMED script
             write_metadynamics_line(
@@ -443,8 +443,8 @@ class Experiment:
                 pace=gaussian_pace, sigma_list=sigma_list, CVs=CVs, exp_name=exp_name, file=f
             )
 
-            # Print script to terminal
-            print_file_contents(file_name)
+            if print_to_terminal:
+                print_file_contents(file_name)
 
     def get_feature_trajs_from_names(
             self,

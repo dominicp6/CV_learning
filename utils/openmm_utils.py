@@ -6,6 +6,7 @@ from collections import namedtuple
 from datetime import datetime
 import json
 import copy
+from pathlib import Path
 
 import numpy as np
 import openmm
@@ -116,6 +117,7 @@ class OpenMMSimulation:
         self.TRAJECTORY_FN = "trajectory.dcd"
         self.STATE_DATA_FN = "state_data.csv"
         self.METADATA_FN = "metadata.json"
+        self.required_files = {self.CHECKPOINT_FN, self.TRAJECTORY_FN, self.STATE_DATA_FN, self.METADATA_FN}
 
         self.valid_ffs = ["amber", "charmm"]
         self.valid_precision = ["single", "mixed", "double"]
@@ -262,9 +264,12 @@ class OpenMMSimulation:
             return self.parser._option_string_actions[arg_key].option_strings[0]
 
         # Generate command
-        command = "python ./home/dominic/PycharmProjects/CV_learning/run_openmm.py "
+        command = "python /home/dominic/PycharmProjects/CV_learning/run_openmm.py "
         command += argdict['pdb'] + " "
         command += argdict['forcefield'] + " "
+        command += argdict['precision'] + " "
+
+        # TODO: make this robust
         try:
             command += argdict['resume'] + " "
         except KeyError:
@@ -278,12 +283,14 @@ class OpenMMSimulation:
         command += f"{flag('--savefreq')} {argdict['--savefreq']} "
         command += f"{flag('--stepsize')} {argdict['--stepsize']} "
         command += f"{flag('--temperature')} {argdict['--temperature']} "
-        command += f"{flag('--pressure')} {argdict['--pressure']} "
+        if argdict['--pressure'] != "":
+            command += f"{flag('--pressure')} {argdict['--pressure']} "
         command += f"{flag('--frictioncoeff')} {argdict['--frictioncoeff']} "
         command += f"{flag('--solventpadding')} {argdict['--solventpadding']} "
         command += f"{flag('--nonbondedcutoff')} {argdict['--nonbondedcutoff']} "
         command += f"{flag('--cutoffmethod')} {argdict['--cutoffmethod']} "
-        command += f"{flag('--periodic')} {argdict['--periodic']} "
+        if argdict['--periodic'] is True:
+            command += f"{flag('--periodic')} "
         # TODO: Fix minimisation
         command += f"{flag('--minimise')} "
         command += f"{flag('--water')} {argdict['--water']} "
@@ -298,7 +305,6 @@ class OpenMMSimulation:
         #     else:
         #         command += f"{value} "
 
-        print(command)
         return command
 
     def parse_args(self):
@@ -434,7 +440,16 @@ class OpenMMSimulation:
             elif self.systemargs.dir and self.systemargs.name:
                 output_dir = os.path.join(self.systemargs.dir, self.systemargs.name)
 
-            os.makedirs(output_dir)
+            try:
+                os.makedirs(output_dir)
+            except FileExistsError:
+                files_in_dir = set(os.listdir(output_dir))
+                simulation_files = self.required_files.intersection(files_in_dir)
+                if simulation_files is not None:
+                    print(f"Output directory {output_dir} already exists has simulation files:")
+                    [print(file) for file in simulation_files]
+                else:
+                    pass
 
         self.output_dir = output_dir
         return self.output_dir
@@ -557,6 +572,8 @@ class OpenMMSimulation:
             print("Adding PLUMED forces")
             with open(self.systemargs.plumed, "r") as plumed_file:
                 plumed_script = plumed_file.read()
+            path = Path(self.systemargs.plumed)
+            os.chdir(path.parent.absolute())
             system.addForce(PlumedForce(plumed_script))
 
         return system

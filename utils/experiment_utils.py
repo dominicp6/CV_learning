@@ -70,24 +70,24 @@ def write_metadynamics_line(well_tempered: bool,
     arg_list = []
     sigma_list = [str(sigma) for sigma in sigma_list]
     for CV in CVs:
-        arg_list.append(f"{CV}")
+        arg_list.append("_".join(CV.split(" ")))
 
     if well_tempered:
         output = (
                 f"METAD ARG={','.join(arg_list)} SIGMA={','.join(sigma_list)} HEIGHT={height} "
-                f"BIASFACTOR={bias_factor} TEMP={temperature} FILE=HILLS_{exp_name} "
-                f"PACE={pace} LABEL=metad \\n\\"
+                f"BIASFACTOR={bias_factor} TEMP={temperature} FILE=HILLS "
+                f"PACE={pace} LABEL=metad "
         )
         file.writelines(output + "\n")
     else:
         output = (
-                f"METAD ARG={','.join(arg_list)} SIGMA={','.join(sigma_list)} HEIGHT={height} FILE=HILLS_{exp_name} "
-                f"PACE={pace} LABEL=metad \\n\\"
+                f"METAD ARG={','.join(arg_list)} SIGMA={','.join(sigma_list)} HEIGHT={height} FILE=HILLS "
+                f"PACE={pace} LABEL=metad "
         )
         file.writelines(output + "\n")
 
     output = (
-        f"PRINT ARG={','.join(arg_list)},metad.bias STRIDE={pace} FILE=COLVAR_{exp_name} \\n\\"
+        f"PRINT ARG={','.join(arg_list)},metad.bias STRIDE={pace} FILE=COLVAR "
     )
-    file.writelines(output + '"' + "\n")
+    file.writelines(output + "\n")
     file.close()

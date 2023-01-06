@@ -50,25 +50,26 @@ def parse_dihedral_string(top, dihedral_string):
 class Dihedral:
     def __init__(
         self,
+        label: str,
         atom_indices: list[int],
-        angle_type: str,
+        # angle_type: str,
         residue_indices: np.array,
         sincos: Optional[str],
         offset: float,
         idx: int,
     ):
         self.atom_indices = atom_indices
-        self.angle_type = angle_type
+        # self.angle_type = angle_type
         self.residue_indices = residue_indices
         self.sincos = sincos
         self.offset = offset
         self.idx = idx
-        # self.str_index = str(int(np.floor(self.idx/2)))
-        self.dihedral_label_trig_removed = "_".join([str(s + 1) for s in atom_indices])
-        if self.sincos:
-            self.dihedral_label = str(self.sincos) + "_" + self.angle_type + "_" + self.dihedral_label_trig_removed
-        else:
-            self.dihedral_label = self.angle_type + "_" + self.dihedral_label_trig_removed
+        self.dihedral_base_label = "_".join([str(s + 1) for s in atom_indices])
+        self.dihedral_label = "_".join(label.split(" "))
+        # if self.sincos:
+        #     self.dihedral_label = str(self.sincos) + "_" + self.angle_type + "_" + self.dihedral_base_label
+        # else:
+        #     self.dihedral_label = self.angle_type + "_" + self.dihedral_base_label
 
     def torsion_label(self):
         # only output one torsion label per sin-cos pair
@@ -76,16 +77,16 @@ class Dihedral:
             return (
                 "TORSION ATOMS="
                 + ",".join(str(i + 1) for i in self.atom_indices)
-                + f" LABEL={self.dihedral_label_trig_removed} \\n\\"
+                + f" LABEL={self.dihedral_base_label} "
             )
         else:
             return None
 
     def transformer_label(self):
         if self.sincos is not None:
-            return f"MATHEVAL ARG={self.dihedral_label_trig_removed} FUNC={self.sincos}(x)-{self.offset} LABEL={self.dihedral_label} PERIODIC=NO \\n\\"
+            return f"MATHEVAL ARG={self.dihedral_base_label} FUNC={self.sincos}(x)-{self.offset} LABEL={self.dihedral_label} PERIODIC=NO "
         else:
-            return f"MATHEVAL ARG={self.dihedral_label_trig_removed} FUNC=x-{self.offset} LABEL={self.dihedral_label} PERIODIC=NO \\n\\"
+            return f"MATHEVAL ARG={self.dihedral_base_label} FUNC=x-{self.offset} LABEL={self.dihedral_label} PERIODIC=NO "
 
 
 class Dihedrals:
@@ -120,7 +121,7 @@ class Dihedrals:
         for idx, label in enumerate(dihedrals):
             sincos, atom_indices, residue_indices, angle_type = parse_dihedral_string(self.topology, label)
             dihedral = Dihedral(
-                atom_indices, angle_type, residue_indices, sincos, offsets[idx], idx
+                label, atom_indices, residue_indices, sincos, offsets[idx], idx
             )
             self.dihedral_objs.append(dihedral)
             self.dihedral_labels.append(dihedral.dihedral_label)
@@ -146,7 +147,6 @@ class Dihedrals:
             f"COMBINE LABEL={CV_name}"
             + f" ARG={','.join(self.dihedral_labels)}"
             + f" COEFFICIENTS={','.join(coefficients)}"
-            + " PERIODIC=NO"
-            + " \\n\\"
+            + " PERIODIC=NO "
         )
         file.writelines(output + "\n")

@@ -130,10 +130,11 @@ class EnhancedSamplingExperiments:
         for pdb_file in list_files(self.starting_structures, 'pdb'):
             for repeat in range(self.number_of_repeats):
                 exp_name = self.get_exp_name(self.CVs, pdb_file, repeat)
-                open(f"{self.output_dir}/HILLS_{exp_name}", "w")
-                open(f"{self.output_dir}/COLVAR_{exp_name}", "w")
+                os.mkdir(f"{self.output_dir}/{exp_name}")
+                open(f"{self.output_dir}/{exp_name}/HILLS", "w")
+                open(f"{self.output_dir}/{exp_name}/COLVAR", "w")
                 self.exp.create_plumed_metadynamics_script(CVs=self.CVs,
-                                                           filename=f"{self.output_dir}/plumed_{exp_name}.dat",
+                                                           filename=f"{self.output_dir}/{exp_name}/plumed.dat",
                                                            exp_name=exp_name,
                                                            gaussian_height=self.meta_d_params['gaussian_height'],
                                                            gaussian_pace=self.meta_d_params['gaussian_pace'],
@@ -141,7 +142,8 @@ class EnhancedSamplingExperiments:
                                                            bias_factor=self.meta_d_params['bias_factor'],
                                                            temperature=self.meta_d_params['temperature'],
                                                            sigma_list=self.meta_d_params['sigma_list'],
-                                                           normalised=self.meta_d_params['normalised'],)
+                                                           normalised=self.meta_d_params['normalised'],
+                                                           print_to_terminal=False)
         self.initialised = True
 
     # 2)
@@ -156,9 +158,9 @@ class EnhancedSamplingExperiments:
                 exp_name = self.get_exp_name(self.CVs, pdb_file, repeat)
                 self.openmm_params["--seed"] = repeat
                 self.openmm_params["--name"] = exp_name
-                self.openmm_params["--PLUMED"] = f"{self.output_dir}/{exp_name}_PLUMED.txt"
-                subprocess.call(OpenMMSimulation().generate_executable_command(self.openmm_params),
-                                shell=True)
+                self.openmm_params["--PLUMED"] = f"{self.output_dir}/{exp_name}/plumed.dat"
+                f = open(f"{self.output_dir}/{exp_name}/output.log", "w")
+                subprocess.call(OpenMMSimulation().generate_executable_command(self.openmm_params), shell=True, stdout=f)
                 # subprocess.call(
                 #     f"mdconvert {self.output_dir}/{exp_name}/trajectory.dcd -o {self.output_dir}/{exp_name}/trajectory.xtc",
                 #     shell=True,
