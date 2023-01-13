@@ -21,7 +21,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 import openmm.unit as unit
-# import nglview as nv
+import nglview as nv
 from deeptime.util.validation import implied_timescales
 from deeptime.plots import plot_implied_timescales
 from tqdm import tqdm
@@ -30,8 +30,8 @@ from scipy.spatial import Voronoi
 from KramersRateEvaluator import KramersRateEvaluator
 from MarkovStateModel import MSM
 from Dihedrals import Dihedrals
-from utils.diffusion_utils import free_energy_estimate_2D
-# import pydiffmap.diffusion_map as dfm
+from utils.diffusion_utils import free_energy_estimate_2D, my_fit_dm
+import pydiffmap.diffusion_map as dfm
 import mdfeature.features as feat
 from utils.plot_utils import voronoi_plot_2d
 from utils.experiment_utils import write_metadynamics_line, get_metadata_file, load_pdb, load_trajectory
@@ -44,24 +44,35 @@ from utils.plotting_functions import init_plot, init_multiplot, save_fig
 # TODO: think what is happening to water molecules in the trajectory
 # TODO: possibly replace with mdtraj featurizer
 def initialise_featurizer(
-        dihedral_features: Union[dict, str], topology
+        features: Union[dict, list[str]], topology
 ) -> pyemma.coordinates.featurizer:
     featurizer = pyemma.coordinates.featurizer(topology)
-    # If features listed explicitly, add them
-    if isinstance(dihedral_features, dict):
+    # If features is a dictionary, then we need the specified dihedral features
+    if isinstance(features, dict):
         dihedral_indices = feat.create_torsions_list(
             atoms=topology.n_atoms,
             size=0,
-            append_to=list(dihedral_features.values()),
+            append_to=list(features.values()),
             print_list=False,
         )
         featurizer.add_dihedrals(dihedral_indices)  # cossin = True
-    elif dihedral_features == "dihedrals":
-        # Add all backbone dihedrals
-        featurizer.add_backbone_torsions()
+    # If features is a list, then we add all features of a given type(s)
+    elif isinstance(features, list):
+        if "dihedrals" in features:
+            # Add all backbone dihedrals
+            featurizer.add_backbone_torsions()
+        if "carbon_alpha" in features:
+            # Add the distances between all carbon alpha atoms to the featurizer
+            featurizer.add_distances_ca()
+        if "sidechain_torsions" in features:
+            # Add all sidechain torsions
+            featurizer.add_sidechain_torsions()
+        if "chi1_torsions" in features:
+            # Add all chi1 torsions
+            featurizer.add_chi1_torsions()
     else:
         raise ValueError(
-            f"Invalid value for dihedral features: '{dihedral_features}'. "
+            f"Invalid value for dihedral features: '{features}'. "
         )
     featurizer.describe()
     return featurizer
@@ -99,8 +110,8 @@ class Experiment:
             "alpha": 0.5,
             "k": 64,
             "kernel_type": "gaussian",
-            "n_evecs": 5,
-            "neighbor_params": None,
+            "n_evecs": 2,
+            "neighbor_params": {'n_jobs': -1, 'algorithm': 'kd_tree'},
             "metric": "euclidean",
             "metric_params": None,
             "weight_fxn": None,
@@ -284,12 +295,14 @@ class Experiment:
         # plt.annotate(f"NB: One step corresponds to a time of {self.savefreq}", xy=(90, 1), xycoords='figure points')
         plt.show()
 
-    def compute_cv(self, CV: str, dim: Optional[int] = None, stride: int = 1, **kwargs):
+    def compute_cv(self, CV: str, dim: Optional[int] = None, stride: int = 1, verbose: bool = True, **kwargs):
         """
+        Compute a given collective variable (CV) on the trajectory.
+        CV options are PCA, TICA, VAMP, DMD and DM.
 
-        :param CV:
+        :param CV: str, CV to compute.
         :param dim: Number of dimensions to keep.
-        :param stride:
+        :param stride: Stride to use when subsampling the trajectory for computing the CV.
         :param kwargs: Any additional keyword arguments for the decomposition functions.
         :return: None
         """
@@ -317,13 +330,12 @@ class Experiment:
                 trajectory[::stride]
             )
         elif CV == "DM":
-            if kwargs is None:
-                kwargs = self.DM_DEFAULTS
-            dm = dfm.DiffusionMap.from_sklearn(**kwargs)
-            self.CVs[CV] = dm.fit(trajectory[::stride])
+            dm = dfm.DiffusionMap.from_sklearn(**self.DM_DEFAULTS)
+            self.CVs[CV] = my_fit_dm(dm,trajectory,stride,tol=kwargs["tol"] if kwargs is not None else 1e-6)
         # TODO: VAMPnets
         t1 = time()
-        print(f"Computed CV in {round(t1 - t0, 3)}s.")
+        if verbose:
+            print(f"Computed CV in {round(t1 - t0, 3)}s.")
 
     def analyse_kramers_rate(
             self, CV: str, dimension: int, lag: int, sigmaD: float, sigmaF: float
@@ -343,7 +355,7 @@ class Experiment:
         trajectory = self.get_trajectory()
         if self.CVs[CV] is None:
             raise ValueError(f"{CV} CVs not computed.")
-        if CV in ["PCA", "TICA", "VAMP"]:
+        if CV in ["PCA", "TICA", "VAMP", "DMD", "DM"]:
             return self.CVs[CV].transform(trajectory[::stride])[:, dim]
         elif CV == "DM":
             return self.CVs[CV].evecs[:, dim]
@@ -538,12 +550,19 @@ class Experiment:
 
         return metad_weights, bias_potential_traj
 
-    def __init_features(self, features: Optional[Union[dict, str]]):
+    def __init_features(self, features: Optional[Union[dict, list[str]]]):
         """
         Featurises the trajectory according to specified features.
         Features can be an explicit dictionary of dihedrals, such as {'\phi' : [4, 6, 8 ,14], '\psi' : [6, 8, 14, 16]}.
-        Alternatively, you can specify the automatic inclusion of *all* backbone dihedrals by setting
-        features = "dihedrals".
+        Alternatively, you can specify the automatic inclusion of all features of particular classes as follows e.g.
+        features = ['dihedrals']                  # adds dihedrals
+        features = ['dihedrals', 'carbon_alpha']  # adds dihedrals and distances between all Ca atoms
+
+        Options for features are:
+        - dihedrals
+        - carbon_alpha
+        - sidechain_torsions
+        - chi1_torsions
         """
         # TODO: check feature names are preserved correctly when adding through dictionary
         if features:

@@ -40,6 +40,21 @@ def clean_and_align_trajectory(
     iterload: bool = False,
     chunk: int = 1000,
 ) -> md.Trajectory:
+    """
+    Clean and align a trajectory.
+
+    :param working_dir: The directory where the trajectory is located.
+    :param top_name: The name of the topology file.
+    :param traj_name: The name of the trajectory file.
+    :param save_name: The name of the trajectory file to be saved. If None, the trajectory will not be saved.
+    :param remove_water: Whether to remove water, ions, and lipids.
+    :param align_protein: Whether to align the protein.
+    :param centre: Whether to centre the coordinates.
+    :param stride: The stride to use when loading the trajectory.
+    :param iterload: Whether to use iterload.
+    :param chunk: The chunk size to use when loading the trajectory.
+    :return:
+    """
 
     traj_path = os.path.join(working_dir, traj_name)
     top_path = os.path.join(working_dir, top_name)

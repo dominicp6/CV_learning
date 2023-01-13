@@ -27,8 +27,8 @@ def parse_dihedral_string(top, dihedral_string):
 
     if sincos is None:
         angle_type = parts[0]
-        res1_index = int(parts[1])
-        res2_index = int(parts[3])
+        # res1_index = int(parts[1])    # TODO: this is not a residue index, work out what it is
+        res_index = int(parts[3]) 
     else:
         raise NotImplementedError("SIN and COS dihedrals are not implemented yet")
 
@@ -41,10 +41,10 @@ def parse_dihedral_string(top, dihedral_string):
         raise ValueError(f"Invalid dihedral angle type: {angle_type}")
 
     # Find the indices of the atoms involved in the dihedral angle
-    atom_indices = indices[res1_index, :]
-    res_indices = [res1_index, res2_index]
+    atom_indices = indices[res_index - 2, :]
+    # res_indices = [res1_index, res2_index]
 
-    return sincos, atom_indices, res_indices, angle_type
+    return sincos, atom_indices, res_index, angle_type
 
 
 class Dihedral:

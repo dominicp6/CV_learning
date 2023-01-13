@@ -25,8 +25,6 @@ meta_d_parameters = {'gaussian_height': 1.2,
 
 if __name__ == "__main__":
     alanine_system = "/home/dominic/PycharmProjects/CV_learning/exp/outputs/alanine_dipeptide/5us_NPT_alanine"
-    chignolin_system = "/home/dominic/PycharmProjects/CV_learning/exp/outputs/chignolin/5us_NPT_chignolin_1uao"
-    deca_alanine_system = "/home/dominic/PycharmProjects/CV_learning/exp/outputs/deca_alanine/5us_NPT_deca_alanine"
 
     # Alanine dipeptide
     output_dir = "/home/dominic/PycharmProjects/CV_learning/exp/outputs/alanine_dipeptide/enhanced_sampling"

@@ -14,8 +14,44 @@ import scipy.integrate as integrate
 # from autograd import grad
 import numpy.typing as npt
 from pyemma.coordinates.clustering import RegularSpaceClustering, KmeansClustering
+import scipy.sparse as sps
+import scipy.sparse.linalg as spsl
+from pydiffmap.diffusion_map import DiffusionMap
 
 import utils.general_utils as gutl
+
+def _make_diffusion_coords(self, L, tol=1e-6):
+    evals, evecs = spsl.eigs(L, k=(self.n_evecs+1), which='LR', tol=tol)
+    ix = evals.argsort()[::-1][1:]
+    evals = np.real(evals[ix])
+    evecs = np.real(evecs[:, ix])
+    dmap = np.dot(evecs, np.diag(np.sqrt(-1. / evals)))
+    return dmap, evecs, evals
+
+
+def my_fit_dm(dm: DiffusionMap, trajectory: np.array, stride: int, tol: float):
+    """
+    Fit a diffusion map to a trajectory, allowing for a stride and a tolerance.
+
+    Parameters
+    ----------
+    dm : DiffusionMap
+        Diffusion map object to fit.
+    trajectory : ndarray
+        Trajectory to fit the diffusion map to.
+    stride : int
+        Stride to use when fitting the diffusion map.
+    tol : float
+        Tolerance to use when fitting the diffusion map.
+    """
+    dm.construct_Lmat(trajectory[::stride])
+    dmap, evecs, evals = _make_diffusion_coords(dm, dm.L, tol=tol)
+    dm.evecs = evecs
+    dm.evals = evals
+    dm.dmap = dmap
+
+    return dm
+
 
 # TODO: axs type
 # TODO: move diffusion utils that require MSM into MSM file
