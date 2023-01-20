@@ -19,6 +19,8 @@ if __name__ == "__main__":
     # Initialise the simulation environment and data reporters
     MD_simulation.setup_simulation()
 
+    # TODO: run NVT to stabilise system
+
     # Run the simulation until completion
     MD_simulation.run_simulation()
 

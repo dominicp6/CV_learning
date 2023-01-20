@@ -44,32 +44,37 @@ from utils.plotting_functions import init_plot, init_multiplot, save_fig
 # TODO: think what is happening to water molecules in the trajectory
 # TODO: possibly replace with mdtraj featurizer
 def initialise_featurizer(
-        features: Union[dict, list[str]], topology
+        features: Union[dict, list[str], np.array], topology
 ) -> pyemma.coordinates.featurizer:
     featurizer = pyemma.coordinates.featurizer(topology)
     # If features is a dictionary, then we need the specified dihedral features
     if isinstance(features, dict):
-        dihedral_indices = feat.create_torsions_list(
-            atoms=topology.n_atoms,
-            size=0,
-            append_to=list(features.values()),
-            print_list=False,
-        )
+        dihedral_indices = np.array(features.values())
         featurizer.add_dihedrals(dihedral_indices)  # cossin = True
-    # If features is a list, then we add all features of a given type(s)
+    # If features is a list of str, then we add all features of the specified type(s)
     elif isinstance(features, list):
         if "dihedrals" in features:
             # Add all backbone dihedrals
             featurizer.add_backbone_torsions()
         if "carbon_alpha" in features:
             # Add the distances between all carbon alpha atoms to the featurizer
-            featurizer.add_distances_ca()
+            if len(featurizer.select_Ca()) < 2:
+                print(f"WARNING: Not enough carbon alpha atoms found in topology to form carbon_alpha features "
+                      f"(needed at least 2, found {len(featurizer.select_Ca())}).")
+            else:
+                featurizer.add_distances_ca()
         if "sidechain_torsions" in features:
             # Add all sidechain torsions
-            featurizer.add_sidechain_torsions()
-        if "chi1_torsions" in features:
-            # Add all chi1 torsions
-            featurizer.add_chi1_torsions()
+            try:
+                featurizer.add_sidechain_torsions()
+            except ValueError:
+                print("WARNING: No sidechain torsions found in topology.")
+        if any([feat not in ["dihedrals", "carbon_alpha", "sidechain_torsions"] for feat in features]):
+            raise ValueError("Unrecognised feature type(s) provided. Allowed types are: dihedrals, carbon_alpha, "
+                             "sidechain_torsions.")
+    elif isinstance(features, np.ndarray):
+        # If features is a numpy array, then we assume it is a list of dihedral indices
+        featurizer.add_dihedrals(features)
     else:
         raise ValueError(
             f"Invalid value for dihedral features: '{features}'. "
@@ -101,7 +106,7 @@ class Experiment:
     def __init__(
             self,
             location: str,
-            features: Optional[Union[dict, str]] = None,
+            features: Optional[Union[dict, list[str]]] = None,
             metad_bias_file=None,
     ):
         # ================== DEFAULTS =====================
@@ -159,8 +164,8 @@ class Experiment:
             self.features_provided,
         ) = self.__init_features(features)
 
-        self.CV_types = ['PCA', 'TICA', 'VAMP', 'DM']
-        self.CVs = {"PCA": None, "TICA": None, "VAMP": None, "DM": None}
+        self.CV_types = ['PCA', 'TICA', 'VAMP', 'DMD', 'DM']
+        self.CVs = {"PCA": None, "TICA": None, "VAMP": None, "DMD": None, "DM": None}
         self.kre = KramersRateEvaluator()
         self.discrete_traj = None
 
@@ -331,11 +336,31 @@ class Experiment:
             )
         elif CV == "DM":
             dm = dfm.DiffusionMap.from_sklearn(**self.DM_DEFAULTS)
-            self.CVs[CV] = my_fit_dm(dm,trajectory,stride,tol=kwargs["tol"] if kwargs is not None else 1e-6)
+            self.CVs[CV] = my_fit_dm(dm, trajectory, stride, tol=kwargs["tol"] if kwargs is not None else 1e-6)
         # TODO: VAMPnets
         t1 = time()
         if verbose:
             print(f"Computed CV in {round(t1 - t0, 3)}s.")
+
+    def compute_correlations(self, CV: str, features: list[str] = None, stride: int = 1):
+        if ":" in CV:
+            cv_type = CV.split(':')[0]
+            dim = int(CV.split(':')[1])
+        else:
+            raise ValueError("CV must be of the form 'CV_type:dim'")
+
+        if features is None:
+            features = self.featurizer.describe()
+
+        self.compute_cv(cv_type, dim=dim+1, stride=stride, verbose=False)
+        cv_data = self._get_cv(cv_type, dim=dim, stride=stride)
+
+        correlations = {}
+        for feature in tqdm(features):
+            feature_data = self.get_feature_trajs_from_names([feature])[::stride]
+            correlations[feature] = np.corrcoef(cv_data, feature_data)[0, 1]
+
+        return correlations
 
     def analyse_kramers_rate(
             self, CV: str, dimension: int, lag: int, sigmaD: float, sigmaF: float
@@ -362,6 +387,17 @@ class Experiment:
         else:
             raise NotImplementedError
 
+    def feature_eigenvalue(self, CV:str, dim: int) -> float:
+        if not self.features_provided:
+            raise ValueError("Cannot compute a feature eigenvalue for an unfeaturized trajectory.")
+        else:
+            if CV in ["VAMP", "TICA"]:
+                return self.CVs[CV].singular_values[dim]
+            elif CV in ["PCA"]:
+                return self.CVs[CV].explained_variance_ratio_[dim]
+            else:
+                raise NotImplementedError
+
     def feature_eigenvector(self, CV: str, dim: int) -> np.array:
         if not self.features_provided:
             raise ValueError(
@@ -371,8 +407,8 @@ class Experiment:
         else:
             return self._lstsq_traj_with_features(traj=self._get_cv(CV, dim))
 
-    def _lstsq_traj_with_features(self, traj: np.array) -> np.array:
-        feat_traj = self.featurized_traj
+    def _lstsq_traj_with_features(self, traj: np.array, feat_traj = None) -> np.array:
+        feat_traj = self.featurized_traj if feat_traj is None else feat_traj
         feat_traj = np.c_[np.ones(self.num_frames), feat_traj]
         coeffs, err, _, _ = np.linalg.lstsq(feat_traj, traj, rcond=None)
 
@@ -427,7 +463,7 @@ class Experiment:
             output = 'RESTART'
             f.write(output + "\n")
 
-            # Initialise Dihedrals class
+            # Initialise Dihedrals class (for now only linear combinations of dihedral CVs are supported)
             dihedral_features = Dihedrals(
                 topology=self.topology,
                 dihedrals=self.featurizer.describe(),
@@ -550,7 +586,7 @@ class Experiment:
 
         return metad_weights, bias_potential_traj
 
-    def __init_features(self, features: Optional[Union[dict, list[str]]]):
+    def __init_features(self, features: Optional[Union[dict, list[str], np.array]]):
         """
         Featurises the trajectory according to specified features.
         Features can be an explicit dictionary of dihedrals, such as {'\phi' : [4, 6, 8 ,14], '\psi' : [6, 8, 14, 16]}.
@@ -562,10 +598,9 @@ class Experiment:
         - dihedrals
         - carbon_alpha
         - sidechain_torsions
-        - chi1_torsions
         """
         # TODO: check feature names are preserved correctly when adding through dictionary
-        if features:
+        if features is not None:
             featurizer = initialise_featurizer(features, self.topology)
             featurized_traj = featurizer.transform(self.traj)
             feature_means = np.mean(featurized_traj, axis=0)

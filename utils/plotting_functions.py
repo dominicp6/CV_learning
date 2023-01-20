@@ -29,10 +29,10 @@ def _set_fig_size(width: float, height: float, ncols: int, nrows: int, scale: st
     fig_height = height * nrows
 
     if scale == "auto":
-        scale = min(1.0, 10.0 / fig_width)  # width of figure cannot exceede 10 inches
+        scale = min(1.0, 13.0 / fig_width)  # width of figure cannot exceed 13 inches
         scale = min(
-            scale, 10.0 / fig_height
-        )  # height of figure cannot exceede 10.0 inches
+            scale, 13.0 / fig_height
+        )  # height of figure cannot exceed 13.0 inches
 
     figsize = (scale * fig_width, scale * fig_height)
 
@@ -63,25 +63,37 @@ def init_plot(
 def init_subplot(
     nrows: int,
     ncols: int,
-    title: Optional[str],
-    xlabel: Optional[str],
-    ylabel: Optional[str],
     width: float = 6,
     height: float = 4,
     scale: str = "auto",
+    title: Optional[str] = None,
+    xlabel: Optional[str] = None,
+    ylabel: Optional[str] = None,
+    xscale: str = "linear",
+    yscale: str = "linear",
     sharex: bool = True,
     sharey: bool = True,
     grid_on: bool = False,
 ):
     figsize = _set_fig_size(width, height, ncols, nrows, scale)
-    fig, axs = plt.subplots(nrows, ncols, figsize=figsize, sharex=sharex, sharey=sharey)
+    fig, axs = plt.subplots(nrows, ncols, figsize=figsize, sharex=sharex, sharey=sharey, squeeze=False)
 
     for ax in axs.flat:
         ax.grid(grid_on)  # maybe add grid lines
 
-    fig.suptitle(title)
-    fig.supxlabel(xlabel)
-    fig.supylabel(ylabel)
+    if xscale == "log":
+        for ax in axs.flat:
+            ax.set_xscale("log")
+    if yscale == "log":
+        for ax in axs.flat:
+            ax.set_yscale("log")
+
+    if title:
+        fig.suptitle(title)
+    if xlabel:
+        fig.supxlabel(xlabel)
+    if ylabel:
+        fig.supylabel(ylabel)
     fig.tight_layout()  # adjust the padding between and around subplots to neaten things up
 
     return fig, axs

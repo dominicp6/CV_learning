@@ -5,14 +5,11 @@
    Author: Dominic Phillips (dominicp6)
 """
 
-import re
 from typing import Optional
 
 import numpy as np
 import mdtraj as md
-from pyemma.coordinates.data.featurization.angles import DihedralFeature
-from mdtraj.geometry.dihedral import indices_psi, indices_phi
-
+from pyemma.coordinates.data.featurization.angles import BackboneTorsionFeature, SideChainTorsions
 
 def parse_dihedral_string(top, dihedral_string):
 
@@ -23,57 +20,122 @@ def parse_dihedral_string(top, dihedral_string):
     else:
         sincos = None
 
-    parts = dihedral_string.split()
+    string_parts = dihedral_string.split()
 
     if sincos is None:
-        angle_type = parts[0]
-        # res1_index = int(parts[1])    # TODO: this is not a residue index, work out what it is
-        res_index = int(parts[3]) 
+        angle_type = string_parts[0]
     else:
         raise NotImplementedError("SIN and COS dihedrals are not implemented yet")
 
-    # Compute the dihedral angle using mdtraj
-    if angle_type == "PHI":
-        indices = indices_phi(top)
-    elif angle_type == "PSI":
-        indices = indices_psi(top)
+    standard_dihedrals = ["PHI", "PSI", "CHI1", "CHI2", "CHI3", "CHI4", "CHI5"]
+
+    if angle_type in standard_dihedrals:
+        angle_type, atom_indices = parse_standard_dihedral(top, angle_type, dihedral_string)
+    elif angle_type == "DIH:":
+        angle_type, atom_indices = parse_generic_dihedral(top, angle_type, dihedral_string)
+    else:
+        raise ValueError("Unrecognised dihedral type: {}".format(string_parts[0]))
+
+    return angle_type, sincos, atom_indices
+
+
+def parse_standard_dihedral(top, angle_type, string):
+    """Parse a standard dihedral angle from a string.
+
+    Parameters
+    ----------
+    top : mdtraj.Topology
+        The topology of the system.
+    angle_type : str
+        The type of dihedral angle.
+    string : str
+        The dihedral string.
+
+    Returns
+    -------
+    angle_type : str
+        The type of dihedral angle.
+    atom_indices : np.ndarray
+        The indices of the atoms involved in the dihedral angle.
+
+    """
+
+    if angle_type in ["PHI", "PSI"]:
+        features = BackboneTorsionFeature(top)
+        description = features.describe()
+        angle_indices = features.angle_indexes
+    elif angle_type in ["CHI1", "CHI2", "CHI3", "CHI4", "CHI5"]:
+        features = SideChainTorsions(top, cossin=False, which=angle_type.lower())
+        description = features.describe()
+        angle_indices = features.angle_indexes
     else:
         raise ValueError(f"Invalid dihedral angle type: {angle_type}")
 
-    # Find the indices of the atoms involved in the dihedral angle
-    atom_indices = indices[res_index - 2, :]
-    # res_indices = [res1_index, res2_index]
+    # Find the index of the string in the description
+    string_index = description.index(string)
 
-    return sincos, atom_indices, res_index, angle_type
+    # Find the indices of the atoms involved in the dihedral angle
+    atom_indices = angle_indices[string_index]
+
+    return angle_type, atom_indices
+
+
+def parse_generic_dihedral(angle_type, dihedral_string):
+    """Parse a generic dihedral angle from a string.
+
+    Parameters
+    ----------
+    angle_type : str
+        The type of dihedral angle.
+    dihedral_string : str
+        The dihedral string.
+
+    Returns
+    -------
+    angle_type : str
+        The type of dihedral angle.
+    atom_indices : np.ndarray
+        The indices of the atoms involved in the dihedral angle.
+
+    Ex string: DIH: ACE 1 C 4 0 - ALA 2 N 6 0 - ALA 2 CA 8 0 - ALA 2 C 14 0
+    """
+
+    string_parts = dihedral_string.split()
+
+    if len(string_parts) == 24:
+        atom_indices = [string_parts[4], string_parts[10], string_parts[16], string_parts[22]]
+    elif len(string_parts) == 20:
+        atom_indices = [string_parts[4], string_parts[9], string_parts[14], string_parts[19]]
+    else:
+        raise ValueError(f"Invalid dihedral string: {dihedral_string}, {len(string_parts)} parts not 20 or 24")
+
+    try:
+        atom_indices = [int(i) for i in atom_indices]
+    except ValueError:
+        raise ValueError(f"Invalid atom indices: {atom_indices}")
+
+    return angle_type[:-1], atom_indices
 
 
 class Dihedral:
     def __init__(
         self,
-        label: str,
         atom_indices: list[int],
-        # angle_type: str,
-        residue_indices: np.array,
+        angle_type: str,
         sincos: Optional[str],
         offset: float,
         idx: int,
     ):
         self.atom_indices = atom_indices
-        # self.angle_type = angle_type
-        self.residue_indices = residue_indices
-        self.sincos = sincos
+        self.sincos = sincos if sincos is not None else ""
         self.offset = offset
         self.idx = idx
         self.dihedral_base_label = "_".join([str(s + 1) for s in atom_indices])
-        self.dihedral_label = "_".join(label.split(" "))
-        # if self.sincos:
-        #     self.dihedral_label = str(self.sincos) + "_" + self.angle_type + "_" + self.dihedral_base_label
-        # else:
-        #     self.dihedral_label = self.angle_type + "_" + self.dihedral_base_label
+        self.dihedral_label = f'{self.sincos}({angle_type})_{"_".join([str(s + 1) for s in atom_indices])}'
 
     def torsion_label(self):
         # only output one torsion label per sin-cos pair
-        if self.sincos == "sin" or self.sincos is None:
+        if self.sincos == "sin" or self.sincos == "":
             return (
                 "TORSION ATOMS="
                 + ",".join(str(i + 1) for i in self.atom_indices)
@@ -119,9 +181,9 @@ class Dihedrals:
 
     def initialise_lists(self, dihedrals: list[str], offsets: list[float]):
         for idx, label in enumerate(dihedrals):
-            sincos, atom_indices, residue_indices, angle_type = parse_dihedral_string(self.topology, label)
+            angle_type, sincos, atom_indices = parse_dihedral_string(self.topology, label)
             dihedral = Dihedral(
-                label, atom_indices, residue_indices, sincos, offsets[idx], idx
+                atom_indices, angle_type, sincos, offsets[idx], idx
             )
             self.dihedral_objs.append(dihedral)
             self.dihedral_labels.append(dihedral.dihedral_label)

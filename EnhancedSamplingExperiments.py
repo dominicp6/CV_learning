@@ -58,6 +58,19 @@ class EnhancedSamplingExperiments:
             # simulations_complete: bool = False,
             features: Optional[Union[dict, str]] = None,
     ):
+        """
+
+
+        :param output_dir: Directory to store all simulation outputs.
+        :param unbiased_exp: Path to the unbiased experiment to use as a template for the metadynamics experiments
+        (for loading topology files).
+        :param CVs:  List of CVs to use in the metadynamics experiments. Format: [CV1, CV2, ...].
+        :param starting_structures: Path to directory containing starting structures for the metadynamics experiments.
+        :param number_of_repeats: Number of times to repeat each metadynamics experiment (for each starting structure).
+        :param openmm_parameters: Dictionary of parameters to pass to the openmm simulation.
+        :param meta_d_parameters: Dictionary of parameters to pass to the PLUMED metadynamics simulation.
+        :param features: Features to use with the unbiased simulation before learning the CVs.
+        """
 
         self.initialised = False
         # self.simulations_complete = simulations_complete
