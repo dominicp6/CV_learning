@@ -177,3 +177,6 @@ def test_parse_dihedral_string_chignolin():
 def test_parse_generic_dihedral_string_chignolin():
     failure_messages = _test_parse_generic_dihedral(chignolin_generic_string_to_indices_dict)
     assert len(failure_messages) == 0, "\n".join(failure_messages)
+
+
+# TODO: add tests for sin and cos dihedral features

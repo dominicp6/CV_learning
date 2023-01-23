@@ -32,7 +32,6 @@ from MarkovStateModel import MSM
 from Dihedrals import Dihedrals
 from utils.diffusion_utils import free_energy_estimate_2D, my_fit_dm
 import pydiffmap.diffusion_map as dfm
-import mdfeature.features as feat
 from utils.plot_utils import voronoi_plot_2d
 from utils.experiment_utils import write_metadynamics_line, get_metadata_file, load_pdb, load_trajectory
 from utils.general_utils import supress_stdout, assert_kwarg, remove_nans, print_file_contents
@@ -44,18 +43,18 @@ from utils.plotting_functions import init_plot, init_multiplot, save_fig
 # TODO: think what is happening to water molecules in the trajectory
 # TODO: possibly replace with mdtraj featurizer
 def initialise_featurizer(
-        features: Union[dict, list[str], np.array], topology
+        features: Union[dict, list[str], np.array], topology, cos_sin=False
 ) -> pyemma.coordinates.featurizer:
     featurizer = pyemma.coordinates.featurizer(topology)
     # If features is a dictionary, then we need the specified dihedral features
     if isinstance(features, dict):
         dihedral_indices = np.array(features.values())
-        featurizer.add_dihedrals(dihedral_indices)  # cossin = True
+        featurizer.add_dihedrals(dihedral_indices, cossin=cos_sin)
     # If features is a list of str, then we add all features of the specified type(s)
     elif isinstance(features, list):
         if "dihedrals" in features:
             # Add all backbone dihedrals
-            featurizer.add_backbone_torsions()
+            featurizer.add_backbone_torsions(cossin=cos_sin)
         if "carbon_alpha" in features:
             # Add the distances between all carbon alpha atoms to the featurizer
             if len(featurizer.select_Ca()) < 2:
@@ -66,7 +65,7 @@ def initialise_featurizer(
         if "sidechain_torsions" in features:
             # Add all sidechain torsions
             try:
-                featurizer.add_sidechain_torsions()
+                featurizer.add_sidechain_torsions(cossin=cos_sin)
             except ValueError:
                 print("WARNING: No sidechain torsions found in topology.")
         if any([feat not in ["dihedrals", "carbon_alpha", "sidechain_torsions"] for feat in features]):
@@ -107,6 +106,7 @@ class Experiment:
             self,
             location: str,
             features: Optional[Union[dict, list[str]]] = None,
+            cos_sin: bool = False,
             metad_bias_file=None,
     ):
         # ================== DEFAULTS =====================
@@ -162,7 +162,7 @@ class Experiment:
             self.feature_stds,
             self.num_features,
             self.features_provided,
-        ) = self.__init_features(features)
+        ) = self.__init_features(features, cos_sin=cos_sin)
 
         self.CV_types = ['PCA', 'TICA', 'VAMP', 'DMD', 'DM']
         self.CVs = {"PCA": None, "TICA": None, "VAMP": None, "DMD": None, "DM": None}
@@ -586,7 +586,7 @@ class Experiment:
 
         return metad_weights, bias_potential_traj
 
-    def __init_features(self, features: Optional[Union[dict, list[str], np.array]]):
+    def __init_features(self, features: Optional[Union[dict, list[str], np.array]], cos_sin: bool = False):
         """
         Featurises the trajectory according to specified features.
         Features can be an explicit dictionary of dihedrals, such as {'\phi' : [4, 6, 8 ,14], '\psi' : [6, 8, 14, 16]}.
@@ -601,7 +601,7 @@ class Experiment:
         """
         # TODO: check feature names are preserved correctly when adding through dictionary
         if features is not None:
-            featurizer = initialise_featurizer(features, self.topology)
+            featurizer = initialise_featurizer(features, self.topology, cos_sin=cos_sin)
             featurized_traj = featurizer.transform(self.traj)
             feature_means = np.mean(featurized_traj, axis=0)
             feature_stds = np.std(featurized_traj, axis=0)

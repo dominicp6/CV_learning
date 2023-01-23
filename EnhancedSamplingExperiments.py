@@ -95,7 +95,7 @@ class EnhancedSamplingExperiments:
         # self.critical_point_labels = [
         #    critical_point[0] for critical_point in self.critical_points
         # ]
-        OpenMMSimulation().check_argument_dict(openmm_parameters)
+        OpenMMSimulation()._check_argument_dict(openmm_parameters)
         self.openmm_params = openmm_parameters
         self.openmm_params["--directory"] = self.output_dir
         self.meta_d_params = meta_d_parameters

@@ -11,6 +11,7 @@ import numpy as np
 import mdtraj as md
 from pyemma.coordinates.data.featurization.angles import BackboneTorsionFeature, SideChainTorsions
 
+
 def parse_dihedral_string(top, dihedral_string):
 
     if "SIN" in dihedral_string and "COS" not in dihedral_string:
@@ -25,14 +26,17 @@ def parse_dihedral_string(top, dihedral_string):
     if sincos is None:
         angle_type = string_parts[0]
     else:
-        raise NotImplementedError("SIN and COS dihedrals are not implemented yet")
+        dihedral_string = dihedral_string.replace(f"{sincos.upper()}", "")
+        dihedral_string = dihedral_string.replace("(", "")
+        dihedral_string = dihedral_string.replace(")", "")
+        angle_type = dihedral_string.split()[0]
 
     standard_dihedrals = ["PHI", "PSI", "CHI1", "CHI2", "CHI3", "CHI4", "CHI5"]
 
     if angle_type in standard_dihedrals:
         angle_type, atom_indices = parse_standard_dihedral(top, angle_type, dihedral_string)
     elif angle_type == "DIH:":
-        angle_type, atom_indices = parse_generic_dihedral(top, angle_type, dihedral_string)
+        angle_type, atom_indices = parse_generic_dihedral(angle_type, dihedral_string)
     else:
         raise ValueError("Unrecognised dihedral type: {}".format(string_parts[0]))
 
