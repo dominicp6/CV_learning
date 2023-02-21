@@ -19,6 +19,7 @@ openmm_parameters = {'--duration': '50ns',
                      '--periodic': True,
                      'forcefield': 'amber14',
                      '--equilibrate': 'NVT',
+                     '--gpu': 0,  # Run on GPU for now
                      }
 meta_d_parameters = {'gaussian_height': 1.2,
                      'gaussian_pace': 500,  # 500 * stepsize = 1ps

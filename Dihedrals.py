@@ -166,7 +166,9 @@ class Dihedral:
         self.dihedral_base_label = "_".join([str(s + 1) for s in atom_indices])
         self.dihedral_label = compute_dihedral_label(sincos=sincos, angle_type=angle_type, atom_indices=atom_indices)
         if periodic:
-            self.periodic = "YES"
+            minimum = -np.pi - offset
+            maximum = np.pi - offset
+            self.periodic = f"{minimum},{maximum}"
         else:
             self.periodic = "NO"
 
