@@ -1,9 +1,26 @@
 import numpy as np
 import mdtraj
+import pyemma
 from pyemma.coordinates.data import CustomFeature
 from tqdm import tqdm
 
-from Experiment import Experiment
+
+def get_periodic_labels(featurizer: pyemma.coordinates.featurizer) -> list[bool]:
+    """
+    Returns a list of booleans indicating whether a given feature is periodic or not.
+
+    :param featurizer: Featurizer object
+    :return: List of booleans
+    """
+    periodic_labels = []
+    for feature in featurizer.active_features:
+        if feature.periodic:
+            periodic_labels.append(True)
+        else:
+            periodic_labels.append(False)
+
+    return periodic_labels
+
 
 def second_largest_eigenvalue(matrix):
     eigenvalues, eigenvectors = np.linalg.eig(matrix)
@@ -28,7 +45,48 @@ def inertia_tensor_second_principal_component(traj: mdtraj.Trajectory):
     return InertiaTensorSecondPrincipalComponent
 
 
-def compute_best_fit_feature_eigenvector(exp: Experiment, cv: str, dimensions_to_keep: int, stride: int = 1, features=None, **kwargs):
+def get_cv_type_and_dim(cv: str):
+    if ":" in cv and "DIH:" not in cv:
+        cv_type = cv.split(':')[0]
+        dim = int(cv.split(':')[1])
+        traditional_cv = True
+    else:
+        cv_type = cv
+        dim = 0
+        traditional_cv = False
+
+    # Tradition CVs refers to PCA, TICA, etc.
+    return traditional_cv, cv_type, dim
+
+def get_features_and_coefficients(exp, cvs: list[str], dimensions_to_keep: int = None, stride: int = 1):
+    if dimensions_to_keep is None:
+        # Keep all dimensions, i.e. use all features
+        features = [exp.featurizer.describe() for _ in cvs]
+        coefficients = []
+        for cv in cvs:
+            traditional_cv, cv_type, cv_dim = get_cv_type_and_dim(cv)
+            if traditional_cv:
+                coefficients.append(exp.feature_eigenvector(cv_type, dim=cv_dim))
+            else:
+                # No need to compute coefficients for individual features
+                continue
+    else:
+        # Compute best-fit features
+        features = []
+        coefficients = []
+        for cv in cvs:
+            features_, coefficients_, _ = compute_best_fit_feature_eigenvector(exp,
+                                                                               cv,
+                                                                               dimensions_to_keep,
+                                                                               stride=stride)
+            features.append(features_)
+            # 1: to get rid of the constant term
+            coefficients.append(coefficients_[1:])
+
+    return features, coefficients
+
+
+def compute_best_fit_feature_eigenvector(exp, cv: str, dimensions_to_keep: int, stride: int = 1, features=None):
     """
     Computes the best fit feature eigenvector for a given CV for a given number of dimensions to keep.
     Uses a greedy algorithm by iteratively adding the feature with the highest correlation to the current eigenvector.
@@ -43,16 +101,14 @@ def compute_best_fit_feature_eigenvector(exp: Experiment, cv: str, dimensions_to
 
     list_of_features = []
 
-    if ":" in cv:
-        cv_type = cv.split(':')[0]
-        dim = int(cv.split(':')[1])
-    else:
+    traditional_cv, cv_type, dim = get_cv_type_and_dim(cv)
+
+    if not traditional_cv:
         raise ValueError("CV must be of the form 'CV_type:dim'")
 
     if features is None:
         features = exp.featurizer.describe()
 
-    exp.compute_cv(cv_type, dim=dim + 1, stride=stride, verbose=False, **kwargs)
     cv_data = exp._get_cv(cv_type, dim=dim, stride=stride)
 
     best_correlations = []

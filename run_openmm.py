@@ -3,7 +3,7 @@
 
    Author: Dominic Phillips (dominicp6)
 """
-from utils.openmm_utils import OpenMMSimulation
+from OpenMMSimulation import OpenMMSimulation
 
 
 if __name__ == "__main__":

@@ -9,37 +9,16 @@
 import os
 import subprocess
 import time as time
-#from collections import defaultdict
+import json
 from typing import Optional, Union
 from datetime import timedelta
 
-#import numpy as np
-#import matplotlib.pyplot as plt
-#import openmm.unit as unit
-#from tqdm import tqdm
-#from scipy.interpolate import griddata
+import numpy as np
 
 from Experiment import Experiment
-from utils.openmm_utils import OpenMMSimulation
+from OpenMMSimulation import OpenMMSimulation
 from utils.general_utils import count_files, list_files
-
-#from Experiment import parse_quantity
-
-
-# def read_HILLS_file(file, skipinitial=3):
-#     HILLS_arr = []
-#     HILLS_strs = []
-#     HILLS_header = []
-#     with open(file, "r") as f:
-#         for idx, line in enumerate(f.readlines()):
-#             if idx < skipinitial:
-#                 HILLS_header.append(line)
-#             else:
-#                 entries = [float(segment.strip()) for segment in line.split()]
-#                 HILLS_arr.append(entries)
-#                 HILLS_strs.append(line)
-#
-#     return np.array(HILLS_arr), HILLS_strs, HILLS_header
+from utils.feature_utils import get_cv_type_and_dim
 
 
 class EnhancedSamplingExperiments:
@@ -50,13 +29,12 @@ class EnhancedSamplingExperiments:
             CVs: list[str],
             starting_structures: str,
             number_of_repeats: int,
-            # critical_points: list[list[float]],
-            # points_on_convergence_plot: list,
-            # fe_grid_size: int,
             openmm_parameters: dict,
             meta_d_parameters: dict,
-            # simulations_complete: bool = False,
-            features: Optional[Union[dict, str]] = None,
+            features: Optional[Union[dict, list[str], np.array]] = None,
+            feature_dimensions: int = None,
+            subtract_feature_means: bool = False,
+            **kwargs,
     ):
         """
 
@@ -73,10 +51,6 @@ class EnhancedSamplingExperiments:
         """
 
         self.initialised = False
-        # self.simulations_complete = simulations_complete
-        # self.FES_constructed = False
-        # self.fe_vals_computed = False
-        # self.fe_vals_summarised = False
 
         if features is None:
             print("Warning: No features specified. Using default cartesian features. (Not recommended)")
@@ -84,17 +58,28 @@ class EnhancedSamplingExperiments:
         self.number_of_repeats = number_of_repeats
         self.starting_structures = starting_structures
         self.num_starting_structures = count_files(self.starting_structures, 'pdb')
-        # self.set_points_on_convergence_plot(points_on_convergence_plot)
-        # self.fe_grid_size = fe_grid_size
+        self.num_total_features = len(features)
+        self.feature_dimensions = feature_dimensions
+        self.subtract_feature_means = subtract_feature_means
 
         self.output_dir = output_dir
         self.CVs = CVs
-        # change working directory
+        for cv in self.CVs:
+            traditional_cv, cv_type, cv_dim = get_cv_type_and_dim(cv)
+            if traditional_cv:
+                if cv_type == "PCA":
+                    if self.exp.CVs[cv_type] is None:
+                        self.exp.compute_cv(cv_type, 3)
+                elif cv_type == "TICA":
+                    if self.exp.CVs[cv_type] is None:
+                        self.exp.compute_cv(cv_type, 3, **kwargs)
+                elif cv_type == "VAMP":
+                    if self.exp.CVs[cv_type] is None:
+                        self.exp.compute_cv(cv_type, 3, **kwargs)
+                else:
+                    raise ValueError(f"CV type {cv_type} not recognised.")
+
         os.chdir(self.output_dir)
-        # self.critical_points = critical_points
-        # self.critical_point_labels = [
-        #    critical_point[0] for critical_point in self.critical_points
-        # ]
         OpenMMSimulation()._check_argument_dict(openmm_parameters)
         self.openmm_params = openmm_parameters
         self.openmm_params["--directory"] = self.output_dir
@@ -105,25 +90,8 @@ class EnhancedSamplingExperiments:
         self.cumulative_time = 0
         self.total_exps = self.num_starting_structures * number_of_repeats
 
-        #                    method              fraction            repeat           grid matrix
-        # self.raw_grid_data = defaultdict(
-        #    lambda: defaultdict(lambda: defaultdict(lambda: np.zeros(0)))
-        # )
-        #              method              critical point      fraction            repeat              value
-        # self.fe_data = defaultdict(
-        #    lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: 0)))
-        # )
-        #                  method              critical point       [[mean, std], ...]
-        # self.avg_fe_data = defaultdict(lambda: defaultdict(lambda: []))
-
-        # self.conver_x_data = [frac * self.simulation_length for frac in self.fractions]
-
-    # def set_points_on_convergence_plot(self, points_on_convergence_plot: int):
-    #     self._points_on_convergence_plot = points_on_convergence_plot
-    #     self.fractions = [
-    #         round((idx + 1) / self._points_on_convergence_plot, 3)
-    #         for idx in range(self._points_on_convergence_plot)
-    #     ]
+        with open(os.path.join(self.output_dir, 'meta_d_params.json'), 'w') as f:
+            json.dump(self.meta_d_params, f)
 
     def progress_logger(self, ti: float, tf: float):
         if self.exps_ran == 0:
@@ -156,10 +124,11 @@ class EnhancedSamplingExperiments:
                                                            temperature=self.meta_d_params['temperature'],
                                                            sigma_list=self.meta_d_params['sigma_list'],
                                                            normalised=self.meta_d_params['normalised'],
+                                                           feature_dimensions=self.feature_dimensions,
+                                                           subtract_feature_means=self.subtract_feature_means,
                                                            print_to_terminal=False)
         self.initialised = True
 
-    # 2)
     def run_openmm_experiments(self):
         ti = None
         tf = None
@@ -174,19 +143,47 @@ class EnhancedSamplingExperiments:
                 self.openmm_params["--PLUMED"] = f"{self.output_dir}/{exp_name}/plumed.dat"
                 f = open(f"{self.output_dir}/{exp_name}/output.log", "w")
                 subprocess.call(OpenMMSimulation().generate_executable_command(self.openmm_params), shell=True, stdout=f)
-                # subprocess.call(
-                #     f"mdconvert {self.output_dir}/{exp_name}/trajectory.dcd -o {self.output_dir}/{exp_name}/trajectory.xtc",
-                #     shell=True,
-                #     stdout=subprocess.DEVNULL,
-                # )
                 tf = time.time()
                 self.exps_ran += 1
-        self.simulations_complete = True
 
-    @staticmethod
-    def get_exp_name(CVs: list[str], pdb_file: str, repeat: int):
+    def get_exp_name(self, CVs: list[str], pdb_file: str, repeat: int):
         CVs = [cv.replace(" ", "_") for cv in CVs]
-        return f"{'_'.join(CVs)}_{pdb_file[:-4]}_repeat_{repeat}"
+        return f"{'_'.join(CVs)}_{pdb_file[:-4]}_repeat_{repeat}_total_features_{self.num_total_features}_feature_dimensions_{self.feature_dimensions}"
+
+    # def read_HILLS_file(file, skipinitial=3):
+    #     HILLS_arr = []
+    #     HILLS_strs = []
+    #     HILLS_header = []
+    #     with open(file, "r") as f:
+    #         for idx, line in enumerate(f.readlines()):
+    #             if idx < skipinitial:
+    #                 HILLS_header.append(line)
+    #             else:
+    #                 entries = [float(segment.strip()) for segment in line.split()]
+    #                 HILLS_arr.append(entries)
+    #                 HILLS_strs.append(line)
+    #
+    #     return np.array(HILLS_arr), HILLS_strs, HILLS_header
+
+    #                    method              fraction            repeat           grid matrix
+    # self.raw_grid_data = defaultdict(
+    #    lambda: defaultdict(lambda: defaultdict(lambda: np.zeros(0)))
+    # )
+    #              method              critical point      fraction            repeat              value
+    # self.fe_data = defaultdict(
+    #    lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: 0)))
+    # )
+    #                  method              critical point       [[mean, std], ...]
+    # self.avg_fe_data = defaultdict(lambda: defaultdict(lambda: []))
+
+    # self.conver_x_data = [frac * self.simulation_length for frac in self.fractions]
+
+    # def set_points_on_convergence_plot(self, points_on_convergence_plot: int):
+    #     self._points_on_convergence_plot = points_on_convergence_plot
+    #     self.fractions = [
+    #         round((idx + 1) / self._points_on_convergence_plot, 3)
+    #         for idx in range(self._points_on_convergence_plot)
+    #     ]
 
     # 3)
     # def run_analysis(self):

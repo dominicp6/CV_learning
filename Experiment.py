@@ -11,6 +11,7 @@ import os
 import json
 import copy
 import re
+import csv
 from time import time
 from typing import Union, Optional
 
@@ -37,6 +38,7 @@ from utils.experiment_utils import write_metadynamics_line, get_metadata_file, l
 from utils.general_utils import supress_stdout, assert_kwarg, remove_nans, print_file_contents
 from utils.openmm_utils import parse_quantity, time_to_iteration_conversion
 from utils.plotting_functions import init_plot, init_multiplot, save_fig
+from utils.feature_utils import compute_best_fit_feature_eigenvector, get_features_and_coefficients, get_cv_type_and_dim
 
 
 # TODO: fix free energy plot to make it work correctly with collective variables
@@ -105,7 +107,7 @@ class Experiment:
     def __init__(
             self,
             location: str,
-            features: Optional[Union[dict, list[str]]] = None,
+            features: Optional[Union[dict, list[str], np.array]] = None,
             cos_sin: bool = False,
             metad_bias_file=None,
     ):
@@ -137,6 +139,7 @@ class Experiment:
             "options": None,
         }
         # ================================================
+        self.location = location
         (
             self.temperature,
             self.duration,
@@ -362,6 +365,19 @@ class Experiment:
 
         return correlations
 
+    def compute_best_fit_feature_eigenvector(self,
+                                             cv: str,
+                                             dimensions_to_keep: int,
+                                             stride: int = 1,
+                                             features=None):
+        list_of_features, feature_coefficients, best_correlations = compute_best_fit_feature_eigenvector(self,
+                                                                                                         cv,
+                                                                                                         dimensions_to_keep,
+                                                                                                         stride,
+                                                                                                         features)
+
+        return list_of_features, feature_coefficients, best_correlations
+
     def analyse_kramers_rate(
             self, CV: str, dimension: int, lag: int, sigmaD: float, sigmaF: float
     ):
@@ -426,7 +442,9 @@ class Experiment:
             temperature: float = 300,
             sigma_list: Optional[list[float]] = None,
             normalised: bool = True,
+            feature_dimensions: int = None,
             print_to_terminal: bool = True,
+            subtract_feature_means: bool = False,
     ):
         """
         Creates a PLUMED script for metadynamics in the current directory.
@@ -442,7 +460,11 @@ class Experiment:
         :param temperature: Temperature for well-tempered metadynamics.
         :param sigma_list: List of sigmas for each CV. If None, defaults to 0.1 for each CV.
         :param normalised:  Whether to use normalised CVs.
+        :param feature_dimensions: Number of features to use when constructing the CV. Uses a greedy algorithm for
+        finding a linear regression of a subset of features that have a high correlation with the underlying CV. If
+        None, defaults to using all features.
         :param print_to_terminal: Whether to print the script to the terminal.
+        :param subtract_feature_means: Whether to subtract the mean of each feature when defining it in the PLUMED script.
         """
         if sigma_list is None:
             sigma_list = [0.1]*len(CVs)
@@ -455,7 +477,7 @@ class Experiment:
             )
         else:
             # Check if CVs are valid
-            atom_features = self._check_valid_cvs(CVs)
+            self._check_valid_cvs(CVs)
 
             # Initialise PLUMED script
             file_name = "./plumed.dat" if filename is None else f"{filename}"
@@ -463,11 +485,26 @@ class Experiment:
             output = 'RESTART'
             f.write(output + "\n")
 
+            features, coefficients = get_features_and_coefficients(self, CVs, feature_dimensions)
+
+            # Union of all features appearing in the CVs
+            relevant_features = list({f for feat in features for f in feat})
+
+            # Save features and coefficients to file
+            with open(os.path.join(self.location, 'enhanced_sampling_features_and_coeffs.csv'), 'w') as f2:
+                writer = csv.writer(f2, delimiter='\t')
+                writer.writerows(zip(features, coefficients))
+
+            if subtract_feature_means:
+                offsets = self.feature_means
+            else:
+                offsets = np.zeros(len(self.featurizer.describe()))
+
             # Initialise Dihedrals class (for now only linear combinations of dihedral CVs are supported)
             dihedral_features = Dihedrals(
                 topology=self.topology,
-                dihedrals=self.featurizer.describe(),
-                offsets=self.feature_means,
+                dihedrals=relevant_features,
+                offsets=offsets,
                 normalised=normalised,
             )
 
@@ -477,18 +514,20 @@ class Experiment:
 
             # Write CVs to PLUMED script
             for idx, CV in enumerate(CVs):
+                traditional_cv, cv_type, cv_dim = get_cv_type_and_dim(CV)
+
                 # Only write combined label for traditional CVs
-                if ":" in CV:
-                    cv_type = CV.split(':')[0]
-                    dim = int(CV.split(':')[1])
+                if traditional_cv:
                     dihedral_features.write_combined_label(CV_name=CV,
-                                                           CV_coefficients=self.feature_eigenvector(cv_type, dim=dim),
+                                                           features=features[idx],
+                                                           coefficients=coefficients[idx],
+                                                           periodic=False,
                                                            file=f)
 
             # Write metadynamics command to PLUMED script
             write_metadynamics_line(
                 well_tempered=well_tempered, bias_factor=bias_factor, temperature=temperature, height=gaussian_height,
-                pace=gaussian_pace, sigma_list=sigma_list, CVs=CVs, exp_name=exp_name, file=f
+                pace=gaussian_pace, sigma_list=sigma_list, CVs=CVs, exp_name=exp_name, file=f, top=self.topology,
             )
 
             if print_to_terminal:
@@ -647,28 +686,16 @@ class Experiment:
 
     def _check_valid_cvs(self, CVs: list[str]):
         """
-        Checks that the CVs provided are valid (either a traditional CV or a single feature)
+        Checks that the CVs provided are valid.
         """
-        atom_features = [False for _ in range(len(CVs))]
         for idx, CV in enumerate(CVs):
-            if ":" in CV:
-                cv_type = CV.split(':')[0]
-            else:
-                cv_type = CV
-            atom_features[idx] = False
-            # Check if the CV is an atom feature (e.g. dihedral angle)
-            if cv_type in self.CVs.keys():
-                atom_features[idx] = False
-            elif cv_type in self.featurizer.describe():
-                atom_features[idx] = True
+            _, cv_type, cv_dim = get_cv_type_and_dim(CV)
             # If the CV is neither an atom feature nor a traditional CV (e.g. TICA, PCA, etc.), raise an error
-            else:
+            if cv_type not in self.CVs.keys() and cv_type not in self.featurizer.describe():
                 raise ValueError(f"CV '{cv_type}' not in {self.CVs.keys()} or {self.featurizer.describe()}")
 
-            if not atom_features[idx] and self.CVs[cv_type] is None:
+            if cv_type in self.CVs.keys() and self.CVs[cv_type] is None:
                 raise ValueError(f"{cv_type} CVs not computed.")
-
-        return atom_features
 
     def _check_fes_arguments(
             self,

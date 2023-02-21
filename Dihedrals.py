@@ -121,6 +121,34 @@ def parse_generic_dihedral(angle_type, dihedral_string):
     return angle_type[:-1], atom_indices
 
 
+def compute_dihedral_label(top = None, dihedral_string = None, atom_indices = None, sincos = None, angle_type = None):
+    """Compute the label for a dihedral angle.
+
+    Parameters
+    ----------
+    top : mdtraj.Topology
+        The topology of the system.
+    dihedral_string : str
+        The dihedral string.
+
+    Returns
+    -------
+    label : str
+        The label for the dihedral angle.
+
+    """
+
+    if angle_type is None or atom_indices is None:
+        angle_type, sincos, atom_indices = parse_dihedral_string(top, dihedral_string)
+
+    if sincos is None:
+        label = f'{angle_type}_{"_".join([str(s + 1) for s in atom_indices])}'
+    else:
+        label = f'{sincos}_{angle_type}_{"_".join([str(s + 1) for s in atom_indices])}'
+
+    return label
+
+
 class Dihedral:
     def __init__(
         self,
@@ -129,13 +157,18 @@ class Dihedral:
         sincos: Optional[str],
         offset: float,
         idx: int,
+        periodic: bool = True,
     ):
         self.atom_indices = atom_indices
         self.sincos = sincos if sincos is not None else ""
         self.offset = offset
         self.idx = idx
         self.dihedral_base_label = "_".join([str(s + 1) for s in atom_indices])
-        self.dihedral_label = f'{self.sincos}({angle_type})_{"_".join([str(s + 1) for s in atom_indices])}'
+        self.dihedral_label = compute_dihedral_label(sincos=sincos, angle_type=angle_type, atom_indices=atom_indices)
+        if periodic:
+            self.periodic = "YES"
+        else:
+            self.periodic = "NO"
 
     def torsion_label(self):
         # only output one torsion label per sin-cos pair
@@ -150,9 +183,9 @@ class Dihedral:
 
     def transformer_label(self):
         if self.sincos is not None:
-            return f"MATHEVAL ARG={self.dihedral_base_label} FUNC={self.sincos}(x)-{self.offset} LABEL={self.dihedral_label} PERIODIC=NO "
+            return f"CUSTOM ARG={self.dihedral_base_label} FUNC={self.sincos}(x)-{self.offset} LABEL={self.dihedral_label} PERIODIC={self.periodic} "
         else:
-            return f"MATHEVAL ARG={self.dihedral_base_label} FUNC=x-{self.offset} LABEL={self.dihedral_label} PERIODIC=NO "
+            return f"CUSTOM ARG={self.dihedral_base_label} FUNC=x-{self.offset} LABEL={self.dihedral_label} PERIODIC={self.periodic} "
 
 
 class Dihedrals:
@@ -203,16 +236,25 @@ class Dihedrals:
             output = dihedral.transformer_label()
             file.writelines(output + "\n")
 
-    def write_combined_label(self, CV_name: str, CV_coefficients: np.array, file):
-        coefficients = self._set_coefficients(CV_coefficients, self.normalised)
-        assert len(coefficients) == len(self.dihedral_labels) == len(self.offsets), \
-            f"The number of coefficients must equal the number of dihedrals and offsets, " \
-            f"but got lengths {len(self.dihedral_labels)} and {len(self.offsets)} respectively."
+    def write_combined_label(self, CV_name: str, features: list[str], coefficients: np.array, periodic: bool, file):
+        coefficients = self._set_coefficients(coefficients, self.normalised)
+        dihedral_labels = []
+        for feature in features:
+            angle_type, sincos, atom_indices = parse_dihedral_string(self.topology, feature)
+            label = compute_dihedral_label(sincos=sincos, angle_type=angle_type, atom_indices=atom_indices)
+            dihedral_labels.append(label)
+        if periodic:
+            periodic = "YES"
+        else:
+            periodic = "NO"
+        assert len(coefficients) == len(features), \
+            f"The number of coefficients ({len(coefficients)}) must equal " \
+            f"the number of provided features ({len(features)})."
 
         output = (
             f"COMBINE LABEL={CV_name}"
-            + f" ARG={','.join(self.dihedral_labels)}"
+            + f" ARG={','.join(dihedral_labels)}"
             + f" COEFFICIENTS={','.join(coefficients)}"
-            + " PERIODIC=NO "
+            + f" PERIODIC={periodic} "
         )
         file.writelines(output + "\n")

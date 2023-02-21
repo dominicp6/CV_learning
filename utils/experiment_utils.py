@@ -14,6 +14,8 @@ import dill
 import numpy as np
 
 from utils.general_utils import select_file_option, check_if_memory_available
+from Dihedrals import compute_dihedral_label
+from utils.feature_utils import get_cv_type_and_dim
 
 
 def load_pdb(loc: str) -> mdtraj.Trajectory:
@@ -66,11 +68,17 @@ def write_metadynamics_line(well_tempered: bool,
                             sigma_list: list[float],
                             CVs: list[str],
                             exp_name: str,
-                            file):
+                            file,
+                            top: mdtraj.Topology,):
     arg_list = []
     sigma_list = [str(sigma) for sigma in sigma_list]
+
     for CV in CVs:
-        arg_list.append("_".join(CV.split(" ")))
+        traditional_cv, cv_type, cv_dim = get_cv_type_and_dim(CV)
+        if not traditional_cv:
+            arg_list.append(compute_dihedral_label(top, CV))
+        else:
+            arg_list.append(CV)
 
     if well_tempered:
         output = (
