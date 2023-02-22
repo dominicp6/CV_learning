@@ -18,7 +18,6 @@ openmm_parameters = {'--duration': '50ns',
                      '--periodic': True,
                      'forcefield': 'amber14',
                      '--equilibrate': 'NVT',
-                     '--gpu': 0,
                      }
 meta_d_parameters = {'gaussian_height': 1.2,
                      'gaussian_pace': 500,    # 500 * stepsize = 1ps
@@ -89,21 +88,21 @@ if __name__ == "__main__":
 
     starting_structures = "/home/dominic/PycharmProjects/CV_learning/exp/outputs/chignolin/one_configuration"
     # PHI-PSI Enhanced Sampling (NVT): 50ns
-    CVs = ['DIH: THR 6 C 73 - GLY 7 N 85 - GLY 7 CA 86 - GLY 7 C 87 ', 'DIH: GLY 7 N 85 - GLY 7 CA 86 - GLY 7 C 87 - THR 8 N 92 ']
-    chignolin_exp = EnhancedSamplingExperiments(
-        output_dir=output_dir,
-        unbiased_exp=chignolin_system,
-        CVs=CVs,
-        starting_structures=starting_structures,
-        number_of_repeats=1,
-        openmm_parameters=openmm_parameters,
-        meta_d_parameters=meta_d_parameters,
-        features=np.array(dihedral_features),
-        feature_dimensions=2,
-    )
-    chignolin_exp.initialise_hills_and_PLUMED()
-    chignolin_exp.run_openmm_experiments()
-    openmm_parameters['--duration'] = '50ns'
+    # CVs = ['DIH: THR 6 C 73 - GLY 7 N 85 - GLY 7 CA 86 - GLY 7 C 87 ', 'DIH: GLY 7 N 85 - GLY 7 CA 86 - GLY 7 C 87 - THR 8 N 92 ']
+    # chignolin_exp = EnhancedSamplingExperiments(
+    #     output_dir=output_dir,
+    #     unbiased_exp=chignolin_system,
+    #     CVs=CVs,
+    #     starting_structures=starting_structures,
+    #     number_of_repeats=1,
+    #     openmm_parameters=openmm_parameters,
+    #     meta_d_parameters=meta_d_parameters,
+    #     features=np.array(dihedral_features),
+    #     feature_dimensions=2,
+    # )
+    # chignolin_exp.initialise_hills_and_PLUMED()
+    # chignolin_exp.run_openmm_experiments()
+    # openmm_parameters['--duration'] = '50ns'
 
     # PHI-PSI Enhanced Sampling (NVT, larger Gaussian height)
     # CVs = ['DIH: THR 6 C 73 - GLY 7 N 85 - GLY 7 CA 86 - GLY 7 C 87 ', 'DIH: GLY 7 N 85 - GLY 7 CA 86 - GLY 7 C 87 - THR 8 N 92 ']
@@ -136,7 +135,7 @@ if __name__ == "__main__":
         openmm_parameters=openmm_parameters,
         meta_d_parameters=meta_d_parameters,
         features=extended_feature_list,
-        feature_dimensions=5,
+        feature_dimensions=3,
         lagtime=5,
     )
     chignolin_exp.initialise_hills_and_PLUMED()
@@ -153,7 +152,7 @@ if __name__ == "__main__":
         openmm_parameters=openmm_parameters,
         meta_d_parameters=meta_d_parameters,
         features=extended_feature_list,
-        feature_dimensions=5,
+        feature_dimensions=3,
         lagtime=5,
     )
     chignolin_exp.initialise_hills_and_PLUMED()
@@ -169,7 +168,7 @@ if __name__ == "__main__":
         openmm_parameters=openmm_parameters,
         meta_d_parameters=meta_d_parameters,
         features=extended_feature_list,
-        feature_dimensions=5
+        feature_dimensions=3
     )
     chignolin_exp.initialise_hills_and_PLUMED()
     chignolin_exp.run_openmm_experiments()

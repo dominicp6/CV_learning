@@ -19,6 +19,7 @@ openmm_parameters = {'--duration': '50ns',
                      '--periodic': True,
                      'forcefield': 'amber14',
                      '--equilibrate': 'NVT',
+                     '--gpu': 0,
                      }
 meta_d_parameters = {'gaussian_height': 1.2,
                      'gaussian_pace': 500,  # 500 * stepsize = 1ps
@@ -151,7 +152,7 @@ if __name__ == "__main__":
         meta_d_parameters=meta_d_parameters,
         features=extended_feature_list,
         subtract_feature_means=True,
-        feature_dimensions=5,
+        feature_dimensions=4,
     )
     alanine_exp.initialise_hills_and_PLUMED()
     alanine_exp.run_openmm_experiments()
@@ -168,7 +169,7 @@ if __name__ == "__main__":
         meta_d_parameters=meta_d_parameters,
         features=extended_feature_list,
         subtract_feature_means=True,
-        feature_dimensions=5,
+        feature_dimensions=4,
         lagtime=1,
     )
     alanine_exp.initialise_hills_and_PLUMED()
@@ -186,7 +187,7 @@ if __name__ == "__main__":
         meta_d_parameters=meta_d_parameters,
         features=extended_feature_list,
         subtract_feature_means=True,
-        feature_dimensions=5,
+        feature_dimensions=4,
         lagtime=1,
     )
     alanine_exp.initialise_hills_and_PLUMED()
