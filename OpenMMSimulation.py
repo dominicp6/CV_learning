@@ -125,7 +125,7 @@ class OpenMMSimulation:
         Run the simulation.
         STEPS: Run the simulation for the specified duration, and save the final checkpoint.
         """
-        print("Running production...")
+        print(f"Running {self.args.duration} production...")
         if self.args.equilibrate:
             # If equilibration was run, resume from the checkpoint file
             self.simulation.simulation.loadCheckpoint(os.path.join(self.output_dir, f"equilibration_final.chk"))

@@ -22,6 +22,23 @@ def get_periodic_labels(featurizer: pyemma.coordinates.featurizer) -> list[bool]
     return periodic_labels
 
 
+def get_feature_means(all_features: list[str], all_means: list[float], selected_features: list[str]):
+    """
+    Returns the means of the selected features.
+
+    :param all_features: List of all features
+    :param all_means: List of all means
+    :param selected_features: List of selected features
+    :return: List of means of selected features
+    """
+    feature_means = []
+    for feature in selected_features:
+        feature_means.append(all_means[all_features.index(feature)])
+
+    return feature_means
+
+
+
 def second_largest_eigenvalue(matrix):
     eigenvalues, eigenvectors = np.linalg.eig(matrix)
     eigenvalues = np.sort(eigenvalues)[::-1]
@@ -75,13 +92,20 @@ def get_features_and_coefficients(exp, cvs: list[str], dimensions_to_keep: int =
         features = []
         coefficients = []
         for cv in cvs:
-            features_, coefficients_, _ = compute_best_fit_feature_eigenvector(exp,
-                                                                               cv,
-                                                                               dimensions_to_keep,
-                                                                               stride=stride)
-            features.append(features_)
-            # 1: to get rid of the constant term
-            coefficients.append(coefficients_[1:])
+            traditional_cv, cv_type, cv_dim = get_cv_type_and_dim(cv)
+            if traditional_cv:
+                # Then we need to compute the best-fit feature vector
+                features_, coefficients_, _ = compute_best_fit_feature_eigenvector(exp,
+                                                                                cv,
+                                                                                dimensions_to_keep,
+                                                                                stride=stride)
+                features.append(features_)
+                # 1: to get rid of the constant term
+                coefficients.append(coefficients_[1:])
+            else:
+                # The CV itself is a feature
+                features.append([cv])
+                coefficients.append([1])
 
     return features, coefficients
 
@@ -101,7 +125,7 @@ def compute_best_fit_feature_eigenvector(exp, cv: str, dimensions_to_keep: int, 
 
     list_of_features = []
 
-    traditional_cv, cv_type, dim = get_cv_type_and_dim(cv)
+    traditional_cv, cv_type, cv_dim = get_cv_type_and_dim(cv)
 
     if not traditional_cv:
         raise ValueError("CV must be of the form 'CV_type:dim'")
@@ -109,7 +133,7 @@ def compute_best_fit_feature_eigenvector(exp, cv: str, dimensions_to_keep: int, 
     if features is None:
         features = exp.featurizer.describe()
 
-    cv_data = exp._get_cv(cv_type, dim=dim, stride=stride)
+    cv_data = exp._get_cv(cv_type, dim=cv_dim, stride=stride)
 
     best_correlations = []
 

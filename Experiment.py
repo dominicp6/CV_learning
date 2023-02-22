@@ -38,7 +38,8 @@ from utils.experiment_utils import write_metadynamics_line, get_metadata_file, l
 from utils.general_utils import supress_stdout, assert_kwarg, remove_nans, print_file_contents
 from utils.openmm_utils import parse_quantity, time_to_iteration_conversion
 from utils.plotting_functions import init_plot, init_multiplot, save_fig
-from utils.feature_utils import compute_best_fit_feature_eigenvector, get_features_and_coefficients, get_cv_type_and_dim
+from utils.feature_utils import compute_best_fit_feature_eigenvector, get_features_and_coefficients, \
+    get_cv_type_and_dim, get_feature_means
 
 
 # TODO: fix free energy plot to make it work correctly with collective variables
@@ -496,9 +497,11 @@ class Experiment:
                 writer.writerows(zip(features, coefficients))
 
             if subtract_feature_means:
-                offsets = self.feature_means
+                offsets = get_feature_means(all_features=self.featurizer.describe(),
+                                            all_means=self.feature_means,
+                                            selected_features=relevant_features)
             else:
-                offsets = np.zeros(len(self.featurizer.describe()))
+                offsets = np.zeros(len(relevant_features))
 
             # Initialise Dihedrals class (for now only linear combinations of dihedral CVs are supported)
             dihedral_features = Dihedrals(
