@@ -7,7 +7,7 @@ from EnhancedSamplingExperiments import EnhancedSamplingExperiments
 
 openmm_parameters = {'--duration': '50ns',
                      '--savefreq': '50ps',
-                     '--stepsize': '2fs',
+                     '--stepsize': '1fs',
                      '--frictioncoeff': '1ps',
                      'precision': 'mixed',
                      '--water': 'tip3p',
@@ -19,7 +19,6 @@ openmm_parameters = {'--duration': '50ns',
                      '--periodic': True,
                      'forcefield': 'amber14',
                      '--equilibrate': 'NVT',
-                     '--gpu': 0,
                      }
 meta_d_parameters = {'gaussian_height': 1.2,
                      'gaussian_pace': 500,  # 500 * stepsize = 1ps
@@ -79,7 +78,7 @@ if __name__ == "__main__":
     # alanine_exp.run_openmm_experiments()
     # openmm_parameters['--duration'] = '50ns'
 
-    # starting_structures = "/home/dominic/PycharmProjects/CV_learning/exp/outputs/alanine_dipeptide/one_configuration"
+    starting_structures = "/home/dominic/PycharmProjects/CV_learning/exp/outputs/alanine_dipeptide/open_configurations"
     #
     # # PCA Enhanced Sampling (NVT) - 4 features
     # CVs = ['PCA:0', 'PCA:1']
@@ -92,13 +91,14 @@ if __name__ == "__main__":
     #     openmm_parameters=openmm_parameters,
     #     meta_d_parameters=meta_d_parameters,
     #     features=feature_list,
-    #     subtract_feature_means=True,
-    #     feature_dimensions=2,
+    #     cos_sin=True,
+    #     subtract_feature_means=False,
+    #     num_cv_features=2,
     # )
     # alanine_exp.initialise_hills_and_PLUMED()
     # alanine_exp.run_openmm_experiments()
-    #
-    # # TICA Enhanced Sampling (NVT) - 4 features
+    # #
+    # # # TICA Enhanced Sampling (NVT) - 4 features
     # CVs = ['TICA:0', 'TICA:1']
     # alanine_exp = EnhancedSamplingExperiments(
     #     output_dir=output_dir,
@@ -109,14 +109,15 @@ if __name__ == "__main__":
     #     openmm_parameters=openmm_parameters,
     #     meta_d_parameters=meta_d_parameters,
     #     features=feature_list,
-    #     subtract_feature_means=True,
-    #     feature_dimensions=2,
+    #     cos_sin=True,
+    #     subtract_feature_means=False,
+    #     num_cv_features=2,
     #     lagtime=1,
     # )
     # alanine_exp.initialise_hills_and_PLUMED()
     # alanine_exp.run_openmm_experiments()
-    #
-    # # VAMP Enhanced Sampling (NVT) - 4 features
+    # #
+    # # # VAMP Enhanced Sampling (NVT) - 4 features
     # CVs = ['VAMP:0', 'VAMP:1']
     # alanine_exp = EnhancedSamplingExperiments(
     #     output_dir=output_dir,
@@ -127,8 +128,9 @@ if __name__ == "__main__":
     #     openmm_parameters=openmm_parameters,
     #     meta_d_parameters=meta_d_parameters,
     #     features=feature_list,
-    #     subtract_feature_means=True,
-    #     feature_dimensions=2,
+    #     subtract_feature_means=False,
+    #     cos_sin=True,
+    #     num_cv_features=2,
     #     lagtime=1,
     # )
     # alanine_exp.initialise_hills_and_PLUMED()
@@ -138,7 +140,7 @@ if __name__ == "__main__":
     # 100 feature experiments
     ###################################################
 
-    # starting_structures = "/home/dominic/PycharmProjects/CV_learning/exp/outputs/alanine_dipeptide/one_configuration"
+    # starting_structures = "/home/dominic/PycharmProjects/CV_learning/exp/outputs/alanine_dipeptide/open_configurations"
     #
     # PCA Enhanced Sampling (NVT) - 100 features
     CVs = ['PCA:0', 'PCA:1']
@@ -151,7 +153,8 @@ if __name__ == "__main__":
         openmm_parameters=openmm_parameters,
         meta_d_parameters=meta_d_parameters,
         features=extended_feature_list,
-        subtract_feature_means=True,
+        subtract_feature_means=False,
+        cos_sin=True,
         feature_dimensions=4,
     )
     alanine_exp.initialise_hills_and_PLUMED()
@@ -168,7 +171,8 @@ if __name__ == "__main__":
         openmm_parameters=openmm_parameters,
         meta_d_parameters=meta_d_parameters,
         features=extended_feature_list,
-        subtract_feature_means=True,
+        subtract_feature_means=False,
+        cos_sin=True,
         feature_dimensions=4,
         lagtime=1,
     )
@@ -186,7 +190,8 @@ if __name__ == "__main__":
         openmm_parameters=openmm_parameters,
         meta_d_parameters=meta_d_parameters,
         features=extended_feature_list,
-        subtract_feature_means=True,
+        subtract_feature_means=False,
+        cos_sin=True,
         feature_dimensions=4,
         lagtime=1,
     )

@@ -107,7 +107,7 @@ class AreaOfInterest:
 
     def grid_interpolation(self, other):
         """
-        Use other data to interpolate a grid with the same dimensions and domain as self.
+        Use other chemicals to interpolate a grid with the same dimensions and domain as self.
         """
         assert other.values is not None, "other must define values to interpolate over"
         return interpolate.griddata(

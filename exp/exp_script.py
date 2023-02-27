@@ -1,7 +1,7 @@
 import subprocess
 
 SCRIPT_DIR = '../..'
-DATA_DIR = '../data/chignolin'
+DATA_DIR = '../chemicals/chignolin'
 DURATION = '2ns'
 SAVE_FRQ = '10ps'
 STEP_SIZE = '2fs'

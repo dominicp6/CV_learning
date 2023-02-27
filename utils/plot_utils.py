@@ -535,7 +535,7 @@ def my_draw_networkx_edge_labels(
                 angle -= 180
             if angle < -90:
                 angle += 180
-            # transform data coordinate angle to screen coordinate angle
+            # transform chemicals coordinate angle to screen coordinate angle
             xy = np.array((x, y))
             trans_angle = ax.transData.transform_angles(
                 np.array((angle,)), xy.reshape((1, 2))

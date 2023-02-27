@@ -149,6 +149,26 @@ def compute_dihedral_label(top = None, dihedral_string = None, atom_indices = No
     return label
 
 
+def compute_dihedral_base_label(atom_indices):
+    """Compute the base label for a dihedral angle.
+
+    Parameters
+    ----------
+    atom_indices : list[int]
+        The indices of the atoms involved in the dihedral angle.
+
+    Returns
+    -------
+    label : str
+        The base label for the dihedral angle.
+
+    """
+
+    label = f'{"_".join([str(s + 1) for s in atom_indices])}'
+
+    return label
+
+
 class Dihedral:
     def __init__(
         self,
@@ -157,20 +177,20 @@ class Dihedral:
         sincos: Optional[str],
         offset: float,
         idx: int,
-        periodic: bool = True,
     ):
         self.atom_indices = atom_indices
         self.sincos = sincos if sincos is not None else ""
         self.offset = offset
         self.idx = idx
-        self.dihedral_base_label = "_".join([str(s + 1) for s in atom_indices])
+        self.angle_type = angle_type
+        self.dihedral_base_label = compute_dihedral_base_label(atom_indices=atom_indices)
         self.dihedral_label = compute_dihedral_label(sincos=sincos, angle_type=angle_type, atom_indices=atom_indices)
-        if periodic:
+        if sincos:
+            self.periodic = "NO"
+        else:
             minimum = -np.pi - offset
             maximum = np.pi - offset
             self.periodic = f"{minimum},{maximum}"
-        else:
-            self.periodic = "NO"
 
     def torsion_label(self):
         # only output one torsion label per sin-cos pair
@@ -184,10 +204,14 @@ class Dihedral:
             return None
 
     def transformer_label(self):
-        if self.sincos is not None:
-            return f"CUSTOM ARG={self.dihedral_base_label} FUNC={self.sincos}(x)-{self.offset} LABEL={self.dihedral_label} PERIODIC={self.periodic} "
+        if self.offset != 0.0:
+            offset_str = f"-{self.offset}"
         else:
-            return f"CUSTOM ARG={self.dihedral_base_label} FUNC=x-{self.offset} LABEL={self.dihedral_label} PERIODIC={self.periodic} "
+            offset_str = ""
+        if self.sincos is not None:
+            return f"CUSTOM ARG={self.dihedral_base_label} FUNC={self.sincos}(x){offset_str} LABEL={self.dihedral_label} PERIODIC={self.periodic} "
+        else:
+            return f"CUSTOM ARG={self.dihedral_base_label} FUNC=x{offset_str} LABEL={self.dihedral_label} PERIODIC={self.periodic} "
 
 
 class Dihedrals:
@@ -195,7 +219,7 @@ class Dihedrals:
         self,
         topology: md.Topology,
         dihedrals: list[str],
-        offsets: np.array,
+        offsets: Optional[np.array],
         normalised: bool,
     ):
         self.dihedral_objs = []
@@ -203,9 +227,10 @@ class Dihedrals:
         self.normalised = normalised
         self.offsets = offsets
         self.topology = topology
-        assert len(dihedrals) == len(offsets), \
-            f"The number of dihedrals and offsets must be equal, " \
-            f"but got lengths {len(dihedrals)} and {len(offsets)} respectively."
+        if offsets is not None:
+            assert len(dihedrals) == len(offsets), \
+                f"The number of dihedrals and offsets must be equal, " \
+                f"but got lengths {len(dihedrals)} and {len(offsets)} respectively."
         self.initialise_lists(dihedrals, offsets)
 
     @staticmethod
@@ -221,8 +246,12 @@ class Dihedrals:
     def initialise_lists(self, dihedrals: list[str], offsets: list[float]):
         for idx, label in enumerate(dihedrals):
             angle_type, sincos, atom_indices = parse_dihedral_string(self.topology, label)
+            if offsets is not None:
+                offset = offsets[idx]
+            else:
+                offset = 0.0
             dihedral = Dihedral(
-                atom_indices, angle_type, sincos, offsets[idx], idx
+                atom_indices, angle_type, sincos, offset, idx
             )
             self.dihedral_objs.append(dihedral)
             self.dihedral_labels.append(dihedral.dihedral_label)

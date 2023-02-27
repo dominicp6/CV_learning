@@ -31,8 +31,9 @@ class EnhancedSamplingExperiments:
             number_of_repeats: int,
             openmm_parameters: dict,
             meta_d_parameters: dict,
+            cos_sin: bool = False,
             features: Optional[Union[dict, list[str], np.array]] = None,
-            feature_dimensions: int = None,
+            num_cv_features: int = None,
             subtract_feature_means: bool = False,
             **kwargs,
     ):
@@ -48,18 +49,20 @@ class EnhancedSamplingExperiments:
         :param openmm_parameters: Dictionary of parameters to pass to the openmm simulation.
         :param meta_d_parameters: Dictionary of parameters to pass to the PLUMED metadynamics simulation.
         :param features: Features to use with the unbiased simulation before learning the CVs.
+        :param cos_sin: Whether to use cos and sin features for the CVs.
+        :param num_cv_features: Number of features to use for each CV.
         """
 
         self.initialised = False
 
         if features is None:
             print("Warning: No features specified. Using default cartesian features. (Not recommended)")
-        self.exp = Experiment(location=unbiased_exp, features=features)
+        self.exp = Experiment(location=unbiased_exp, features=features, cos_sin=cos_sin)
         self.number_of_repeats = number_of_repeats
         self.starting_structures = starting_structures
         self.num_starting_structures = count_files(self.starting_structures, 'pdb')
-        self.num_total_features = len(features)
-        self.feature_dimensions = feature_dimensions
+        self.num_total_features = len(self.exp.featurizer.describe())
+        self.num_cv_features = num_cv_features
         self.subtract_feature_means = subtract_feature_means
 
         self.output_dir = output_dir
@@ -124,7 +127,7 @@ class EnhancedSamplingExperiments:
                                                            temperature=self.meta_d_params['temperature'],
                                                            sigma_list=self.meta_d_params['sigma_list'],
                                                            normalised=self.meta_d_params['normalised'],
-                                                           feature_dimensions=self.feature_dimensions,
+                                                           feature_dimensions=self.num_cv_features,
                                                            subtract_feature_means=self.subtract_feature_means,
                                                            print_to_terminal=False)
         self.initialised = True
@@ -148,7 +151,7 @@ class EnhancedSamplingExperiments:
 
     def get_exp_name(self, CVs: list[str], pdb_file: str, repeat: int):
         CVs = [cv.replace(" ", "_") for cv in CVs]
-        return f"{'_'.join(CVs)}_{pdb_file[:-4]}_repeat_{repeat}_total_features_{self.num_total_features}_feature_dimensions_{self.feature_dimensions}"
+        return f"{'_'.join(CVs)}_{pdb_file[:-4]}_repeat_{repeat}_total_features_{self.num_total_features}_feature_dimensions_{self.num_cv_features}"
 
     # def read_HILLS_file(file, skipinitial=3):
     #     HILLS_arr = []
@@ -191,7 +194,7 @@ class EnhancedSamplingExperiments:
     #     self.load_FESs()
     #     print("Extracting FE values...")
     #     self.extract_fe_vals()
-    #     print("Summarising FE data...")
+    #     print("Summarising FE chemicals...")
     #     self.summarise_fe_data()
     #     print("Making convergence plots...")
     #     # self.make_convergence_plots()
@@ -287,10 +290,10 @@ class EnhancedSamplingExperiments:
     #     self.fe_vals_computed = True
 
     # def get_fe_grid_of_exp(self, method: str, repeat: int, fraction: float):
-    #     data = self.raw_grid_data[method][fraction][repeat]
-    #     phi = data[:, 0]
-    #     psi = data[:, 1]
-    #     fe = data[:, 2] - np.min(data[:, 2])
+    #     chemicals = self.raw_grid_data[method][fraction][repeat]
+    #     phi = chemicals[:, 0]
+    #     psi = chemicals[:, 1]
+    #     fe = chemicals[:, 2] - np.min(chemicals[:, 2])
     #     return phi, psi, fe
 
     # def convert_xyz_to_numpy_grid(self, x: np.array, y: np.array, z: np.array) -> np.array:

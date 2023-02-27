@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""Utilitys for working with data arrays.
+"""Utilitys for working with chemicals arrays.
 
    Author: Dominic Phillips (dominicp6)
 """

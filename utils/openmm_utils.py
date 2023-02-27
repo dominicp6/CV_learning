@@ -10,7 +10,7 @@ SystemArgs = namedtuple(
     "System_Args",
     "pdb forcefield resume plumed duration savefreq stepsize temperature pressure "
     "frictioncoeff solventpadding nonbondedcutoff cutoffmethod total_steps steps_per_save "
-    "periodic gpu minimise precision watermodel seed name dir equilibrate",
+    "periodic gpu minimise precision water seed name directory equilibrate",
 )
 
 SystemObjs = namedtuple("System_Objs", "pdb modeller system")

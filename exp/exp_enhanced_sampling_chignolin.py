@@ -6,7 +6,7 @@ from EnhancedSamplingExperiments import EnhancedSamplingExperiments
 
 openmm_parameters = {'--duration': '50ns',
                      '--savefreq': '50ps',
-                     '--stepsize': '2fs',
+                     '--stepsize': '1fs',
                      '--frictioncoeff': '1ps',
                      'precision': 'mixed',
                      '--water': 'tip3p',
@@ -18,6 +18,7 @@ openmm_parameters = {'--duration': '50ns',
                      '--periodic': True,
                      'forcefield': 'amber14',
                      '--equilibrate': 'NVT',
+                     '--gpu': 0,
                      }
 meta_d_parameters = {'gaussian_height': 1.2,
                      'gaussian_pace': 500,    # 500 * stepsize = 1ps
@@ -34,7 +35,7 @@ if __name__ == "__main__":
     # Chignolin
     output_dir = "/home/dominic/PycharmProjects/CV_learning/exp/outputs/chignolin/enhanced_sampling"
     starting_structures = "/home/dominic/PycharmProjects/CV_learning/exp/outputs/chignolin/one_configuration"
-    openmm_parameters['pdb'] = "/home/dominic/PycharmProjects/CV_learning/exp/data/chignolin/minimised.pdb"
+    openmm_parameters['pdb'] = "/home/dominic/PycharmProjects/CV_learning/exp/chemicals/chignolin/minimised.pdb"
 
     atoms_in_chignolin = 138
 
@@ -88,41 +89,41 @@ if __name__ == "__main__":
 
     starting_structures = "/home/dominic/PycharmProjects/CV_learning/exp/outputs/chignolin/one_configuration"
     # PHI-PSI Enhanced Sampling (NVT): 50ns
-    # CVs = ['DIH: THR 6 C 73 - GLY 7 N 85 - GLY 7 CA 86 - GLY 7 C 87 ', 'DIH: GLY 7 N 85 - GLY 7 CA 86 - GLY 7 C 87 - THR 8 N 92 ']
-    # chignolin_exp = EnhancedSamplingExperiments(
-    #     output_dir=output_dir,
-    #     unbiased_exp=chignolin_system,
-    #     CVs=CVs,
-    #     starting_structures=starting_structures,
-    #     number_of_repeats=1,
-    #     openmm_parameters=openmm_parameters,
-    #     meta_d_parameters=meta_d_parameters,
-    #     features=np.array(dihedral_features),
-    #     feature_dimensions=2,
-    # )
-    # chignolin_exp.initialise_hills_and_PLUMED()
-    # chignolin_exp.run_openmm_experiments()
-    # openmm_parameters['--duration'] = '50ns'
+    openmm_parameters['--duration'] = '100ns'
+    CVs = ['DIH: THR 6 C 73 - GLY 7 N 85 - GLY 7 CA 86 - GLY 7 C 87 ', 'DIH: GLY 7 N 85 - GLY 7 CA 86 - GLY 7 C 87 - THR 8 N 92 ']
+    chignolin_exp = EnhancedSamplingExperiments(
+        output_dir=output_dir,
+        unbiased_exp=chignolin_system,
+        CVs=CVs,
+        starting_structures=starting_structures,
+        number_of_repeats=1,
+        openmm_parameters=openmm_parameters,
+        meta_d_parameters=meta_d_parameters,
+        features=np.array(dihedral_features),
+        feature_dimensions=2,
+    )
+    chignolin_exp.initialise_hills_and_PLUMED()
+    chignolin_exp.run_openmm_experiments()
+    openmm_parameters['--duration'] = '50ns'
 
     # PHI-PSI Enhanced Sampling (NVT, larger Gaussian height)
-    # CVs = ['DIH: THR 6 C 73 - GLY 7 N 85 - GLY 7 CA 86 - GLY 7 C 87 ', 'DIH: GLY 7 N 85 - GLY 7 CA 86 - GLY 7 C 87 - THR 8 N 92 ']
-    # meta_d_parameters['gaussian_height'] = 2.5
-    # chignolin_exp = EnhancedSamplingExperiments(
-    #     output_dir=output_dir,
-    #     unbiased_exp=chignolin_system,
-    #     CVs=CVs,
-    #     starting_structures=starting_structures,
-    #     number_of_repeats=1,
-    #     openmm_parameters=openmm_parameters,
-    #     meta_d_parameters=meta_d_parameters,
-    #     features=extended_feature_list,
-    #     feature_dimensions=2,
-    # )
-    # chignolin_exp.initialise_hills_and_PLUMED()
-    # chignolin_exp.run_openmm_experiments()
-    # meta_d_parameters['gaussian_height'] = 1.2
-
-    # PCA Enhanced Sampling (NVT) - 5 features
+    CVs = ['DIH: THR 6 C 73 - GLY 7 N 85 - GLY 7 CA 86 - GLY 7 C 87 ', 'DIH: GLY 7 N 85 - GLY 7 CA 86 - GLY 7 C 87 - THR 8 N 92 ']
+    meta_d_parameters['gaussian_height'] = 2.5
+    chignolin_exp = EnhancedSamplingExperiments(
+        output_dir=output_dir,
+        unbiased_exp=chignolin_system,
+        CVs=CVs,
+        starting_structures=starting_structures,
+        number_of_repeats=1,
+        openmm_parameters=openmm_parameters,
+        meta_d_parameters=meta_d_parameters,
+        features=extended_feature_list,
+        cos_sin=True,
+        feature_dimensions=2,
+    )
+    chignolin_exp.initialise_hills_and_PLUMED()
+    chignolin_exp.run_openmm_experiments()
+    meta_d_parameters['gaussian_height'] = 1.2
 
     # TICA Enhanced Sampling (NVT) - 5 features
     CVs = ['TICA:0', 'TICA:1']
@@ -135,7 +136,8 @@ if __name__ == "__main__":
         openmm_parameters=openmm_parameters,
         meta_d_parameters=meta_d_parameters,
         features=extended_feature_list,
-        feature_dimensions=3,
+        num_cv_features=5,
+        cos_sin=True,
         lagtime=5,
     )
     chignolin_exp.initialise_hills_and_PLUMED()
@@ -152,12 +154,14 @@ if __name__ == "__main__":
         openmm_parameters=openmm_parameters,
         meta_d_parameters=meta_d_parameters,
         features=extended_feature_list,
-        feature_dimensions=3,
+        num_cv_features=5,
+        cos_sin=True,
         lagtime=5,
     )
     chignolin_exp.initialise_hills_and_PLUMED()
     chignolin_exp.run_openmm_experiments()
 
+    # PCA Enhanced Sampling (NVT) - 5 features
     CVs = ['PCA:0', 'PCA:1']
     chignolin_exp = EnhancedSamplingExperiments(
         output_dir=output_dir,
@@ -168,7 +172,8 @@ if __name__ == "__main__":
         openmm_parameters=openmm_parameters,
         meta_d_parameters=meta_d_parameters,
         features=extended_feature_list,
-        feature_dimensions=3
+        cos_sin=True,
+        num_cv_features=5
     )
     chignolin_exp.initialise_hills_and_PLUMED()
     chignolin_exp.run_openmm_experiments()

@@ -33,10 +33,10 @@ class MSM:
         self.number_of_states = number_of_states  # number of discrete states
         self.lagtime = parse_quantity(lagtime)
 
-        self.timestep = None  # the timestep between frames of the data
+        self.timestep = None  # the timestep between frames of the chemicals
         self.lagstep = None  # lagtime / timestep
-        self.dimension = None  # the dimension of the trajectory data used to train the MSM
-        self.data = None  # the data used to train the MSM
+        self.dimension = None  # the dimension of the trajectory chemicals used to train the MSM
+        self.data = None  # the chemicals used to train the MSM
 
         self.clustering = None
         self.state_centres = None  # coordinates of the centres of the MSM states
@@ -54,7 +54,7 @@ class MSM:
         self.reversible = reversible
 
     def fit(self, data: np.array, timestep: unit.Unit):
-        assert len(data.shape) < 3, f"The data array must be either 1D or 2D but got shape {data.shape}"
+        assert len(data.shape) < 3, f"The chemicals array must be either 1D or 2D but got shape {data.shape}"
         self.dimension = np.shape(data)[1] if len(data.shape) == 2 else 1
         self.timestep = timestep
         self.lagstep = math.floor(self.lagtime / self.timestep)
@@ -229,7 +229,7 @@ class MSM:
     def plot_inertia(self, show: bool = True, ax=None):
         """
         Inertia measures how well a dataset was clustered by K-Means. It is calculated by measuring the distance
-        between each data point and its centroid, squaring this distance, and summing these squares across one cluster.
+        between each chemicals point and its centroid, squaring this distance, and summing these squares across one cluster.
         """
         fig, ax = init_plot("Inertia of KMeans Training", "iteration", "inertia", xscale="log", ax=ax)
         print(self.clustering.inertias)

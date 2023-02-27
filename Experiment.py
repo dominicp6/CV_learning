@@ -76,7 +76,7 @@ def initialise_featurizer(
                              "sidechain_torsions.")
     elif isinstance(features, np.ndarray):
         # If features is a numpy array, then we assume it is a list of dihedral indices
-        featurizer.add_dihedrals(features)
+        featurizer.add_dihedrals(features, cossin=cos_sin)
     else:
         raise ValueError(
             f"Invalid value for dihedral features: '{features}'. "
@@ -195,7 +195,7 @@ class Experiment:
     ):
         feature_nicknames = self._check_fes_arguments(features, feature_nicknames)
         fig, ax = init_plot("Free Energy Surface", f"${feature_nicknames[0]}$", f"${feature_nicknames[1]}$", ax=ax)
-        # get traj of features and trim to data fraction
+        # get traj of features and trim to chemicals fraction
         feature_traj = self.get_feature_trajs_from_names(features)[:int(data_fraction * self.num_frames)]
         if self.bias_potential_traj:
             # biased experiments require contour plots
@@ -501,7 +501,7 @@ class Experiment:
                                             all_means=self.feature_means,
                                             selected_features=relevant_features)
             else:
-                offsets = np.zeros(len(relevant_features))
+                offsets = None
 
             # Initialise Dihedrals class (for now only linear combinations of dihedral CVs are supported)
             dihedral_features = Dihedrals(
@@ -594,7 +594,7 @@ class Experiment:
 
     def _init_datafiles(self, location: str):
         """
-        Reads molecular system and trajectory data from file
+        Reads molecular system and trajectory chemicals from file
         """
         pdb = load_pdb(location)
         topology = pdb.topology

@@ -16,12 +16,89 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as tkr
 import seaborn as sns
+import mdtraj as md
 
 from utils.trajectory_utils import clean_and_align_trajectory
 from utils.openmm_utils import parse_args, parse_quantity, cutoff_method, get_unit_cell_dims, add_barostat, \
     get_integrator, SystemObjs, get_flag, SimulationProps, stringify_named_tuple, check_fields_unchanged, \
     update_numerical_fields
 from EquilibrationProtocol import EquilibrationProtocol
+
+
+class PDBSimulation(OpenMMSimulation):
+
+    def _init_model(self) -> app.PDBFile:
+        """
+        Initialises the model from a PDB file.
+        Specifies in the PDB object whether periodic boundary conditions are used.
+        :return: PDB object
+        """
+        pdb = app.PDBFile(self.args.pdb)
+        if self.args.periodic is False:
+            # print("Setting non-periodic boundary conditions")
+            pdb.topology.setPeriodicBoxVectors(None)
+
+        return pdb
+
+
+class MOL2Simulation(OpenMMSimulation):
+
+    def _init_model(self):
+        """
+        Initialises the model from a MOL2 file.
+        """
+        ligand_traj = md.load(self.args.pdb)
+        ligand_traj.center_coordinates()
+        ligand_xyz = ligand_traj.openmm_positions(0)
+        ligand_top = ligand_traj.top.to_openmm()
+
+        return ligand_top, ligand_xyz
+
+    def _init_forcefield(self) -> app.ForceField:
+        """
+        Initialises the forcefield object.
+        :return: Forcefield object
+        """
+        if self.args.forcefield == "amber14":  # Create AMBER system
+            self.force_field = app.ForceField("amber14-all.xml", xml_filename, "amber14/tip3p.xml")
+        elif self.args.forcefield == "charmm36":  # Create CHARMM system
+            self.force_field = app.ForceField("charmm36.xml", xml_filename, "charmm36/water.xml")
+        else:
+            raise ValueError(f"Force field {self.args.forcefield} not supported.")
+
+        return self.force_field
+
+    def _init_modeller(self, pdb: app.PDBFile) -> app.Modeller:
+        # TODO: modify
+        """
+        Initialises the Modeller object.
+        :param pdb: PDB object
+        :return: Modeller object
+        """
+        modeller = app.Modeller(pdb.topology, pdb.positions)
+        if self.args.resume:
+            # print("Resuming simulation, skipping modeller modifications")
+            pass
+        else:
+            # Check if the loaded topology file already has water
+            if np.any([atom.residue.name == 'HOH' for atom in pdb.topology.atoms()]):
+                # print("Water found in PBD file: Not changing solvation properties; solvent padding ignored!")
+                pass
+            else:
+                # If no water present and the use has specified using a water model
+                if self.args.water:
+                    # Automatically add water to the modeller
+                    # print("No water found in PDB file: Adding water...")
+                    modeller.addSolvent(
+                        self.force_field,
+                        model=self.args.water,
+                        padding=self.args.solventpadding,
+                    )
+                else:
+                    # Do not add water to the modeller
+                    pass
+
+        return modeller
 
 
 class OpenMMSimulation:
@@ -48,9 +125,35 @@ class OpenMMSimulation:
         self.output_dir = None
         self.force_field = None
 
+        # ARGUMENTS
+        self.SPECIAL_ARGS = {
+        'resume': {'flag': '', 'optional': True},
+        '--gpu': {'flag': '--gpu', 'optional': True},
+        '--pressure': {'flag': '--pressure', 'optional': True},
+        '--periodic': {'flag': '--periodic', 'optional': True}
+        }
+
         # Parser and arg check
         self.parser = self._init_parser()
-        self.args = None
+        self.args = self.parser.parse_args()
+        if not any(vars(self.args)):
+            # No arguments were given
+            pass
+        else:
+            # Arguments were given, check them
+            self._check_args()
+
+    def from_args(self, args: dict):
+        """
+        Initialises the simulation object from a dictionary of arguments and checks them.
+        """
+        #  TODO: debug this method
+        for field in self.parser.__dict__:
+            if field in args:
+                setattr(self.args, field, args[field])
+        self._check_args()
+
+        return self
 
     def run(self):
         """
@@ -69,9 +172,6 @@ class OpenMMSimulation:
         STEPS: Initialise directories, read in the PDB, set up the force field, set up the system model including
         any solvent (optional), save a PDB of the entire system model, and create the system object.
         """
-        self.args = parse_args(self.parser)
-        self._check_args()
-        print("[✓] Checked arguments")
         self._init_output_dir()
         print("[✓] Created output directory")
         pdb = self._init_pdb()
@@ -138,8 +238,8 @@ class OpenMMSimulation:
         """
         Post-process the simulation.
         STEPS: Centre and align the trajectory, removing solvent, and save the modified trajectory. Read in the
-        state data and create plots of energy, temperature etc. Finally, analyse basic statistics of the state
-        data and save these to a JSON file.
+        state chemicals and create plots of energy, temperature etc. Finally, analyse basic statistics of the state
+        chemicals and save these to a JSON file.
         """
         clean_and_align_trajectory(working_dir=self.output_dir,
                                    traj_name='trajectory.dcd',
@@ -148,56 +248,79 @@ class OpenMMSimulation:
         print("[✓] Cleaned and aligned trajectory")
         report = pd.read_csv(os.path.join(self.output_dir, self.STATE_DATA_FN))
         self._make_graphs(report)
-        print("[✓] Made graphs of simulation data")
+        print("[✓] Made graphs of simulation chemicals")
         self._make_summary_statistics(report)
         print("[✓] Saved summary statistics")
 
-    def generate_executable_command(self, arg_dict: dict):
+    def generate_executable_command(self, args: dict):
         """
         Generate a command to run a simulation with the desired arguments.
         :param arg_dict: Dictionary of arguments
         :return: String of command
         """
-        # self._check_argument_dict(arg_dict)
+        #  TODO: debug this method
 
         # Generate command
         command = "python /home/dominic/PycharmProjects/CV_learning/run_openmm.py "
 
-        # Add required arguments
-        command += arg_dict['pdb'] + " "
-        command += arg_dict['forcefield'] + " "
-        command += arg_dict['precision'] + " "
+        # Iterate over argument names and their flags
+        for arg_name, arg_flag in self.parser._option_string_actions.items():
+            if arg_name in self.SPECIAL_ARGS:
+                continue
 
-        # Add optional arguments
-        try:
-            command += arg_dict['resume'] + " "
-        except KeyError:
-            pass
-        command += f"{get_flag(self.parser, '--PLUMED')} {arg_dict['--PLUMED']} "
-        try:
-            command += f"{get_flag(self.parser, '--gpu')} {arg_dict['--gpu']} "
-        except KeyError:
-            pass
-        command += f"{get_flag(self.parser, '--duration')} {arg_dict['--duration']} "
-        command += f"{get_flag(self.parser, '--savefreq')} {arg_dict['--savefreq']} "
-        command += f"{get_flag(self.parser, '--stepsize')} {arg_dict['--stepsize']} "
-        command += f"{get_flag(self.parser, '--temperature')} {arg_dict['--temperature']} "
-        if arg_dict['--pressure'] != "":
-            command += f"{get_flag(self.parser, '--pressure')} {arg_dict['--pressure']} "
-        command += f"{get_flag(self.parser, '--frictioncoeff')} {arg_dict['--frictioncoeff']} "
-        command += f"{get_flag(self.parser, '--solventpadding')} {arg_dict['--solventpadding']} "
-        command += f"{get_flag(self.parser, '--nonbondedcutoff')} {arg_dict['--nonbondedcutoff']} "
-        command += f"{get_flag(self.parser, '--cutoffmethod')} {arg_dict['--cutoffmethod']} "
-        if arg_dict['--periodic'] is True:
-            command += f"{get_flag(self.parser, '--periodic')} "
-        command += f"{get_flag(self.parser, '--minimise')} "
-        command += f"{get_flag(self.parser, '--water')} {arg_dict['--water']} "
-        command += f"{get_flag(self.parser, '--seed')} {arg_dict['--seed']} "
-        command += f"{get_flag(self.parser, '--name')} {arg_dict['--name']} "
-        command += f"{get_flag(self.parser, '--directory')} {arg_dict['--directory']} "
-        command += f"{get_flag(self.parser, '--equilibrate')} {arg_dict['--equilibrate']} "
+            # Check if argument is required or optional
+            if arg_flag.required:
+                command += f"{args[arg_name]} "
+            else:
+                flag = f"{self.parser.prefix_chars[0]}{arg_name.lstrip(self.parser.prefix_chars)}"
+                command += f"{flag} {args[arg_name]} "
+
+        # Add special arguments
+        for arg_name, arg_info in self.SPECIAL_ARGS.items():
+            if arg_name in args:
+                if arg_info['optional']:
+                    command += f"{arg_info['flag']} {args[arg_name]} "
+                else:
+                    command += f"{args[arg_name]} "
 
         return command
+
+
+        # Add required arguments
+        # command += arg_dict['pdb'] + " "
+        # command += arg_dict['forcefield'] + " "
+        # command += arg_dict['precision'] + " "
+
+        # # Add optional arguments
+        # try:
+        #     command += arg_dict['resume'] + " "
+        # except KeyError:
+        #     pass
+        # command += f"{get_flag(self.parser, '--PLUMED')} {arg_dict['--PLUMED']} "
+        # try:
+        #     command += f"{get_flag(self.parser, '--gpu')} {arg_dict['--gpu']} "
+        # except KeyError:
+        #     pass
+        # command += f"{get_flag(self.parser, '--duration')} {arg_dict['--duration']} "
+        # command += f"{get_flag(self.parser, '--savefreq')} {arg_dict['--savefreq']} "
+        # command += f"{get_flag(self.parser, '--stepsize')} {arg_dict['--stepsize']} "
+        # command += f"{get_flag(self.parser, '--temperature')} {arg_dict['--temperature']} "
+        # if arg_dict['--pressure'] != "":
+        #     command += f"{get_flag(self.parser, '--pressure')} {arg_dict['--pressure']} "
+        # command += f"{get_flag(self.parser, '--frictioncoeff')} {arg_dict['--frictioncoeff']} "
+        # command += f"{get_flag(self.parser, '--solventpadding')} {arg_dict['--solventpadding']} "
+        # command += f"{get_flag(self.parser, '--nonbondedcutoff')} {arg_dict['--nonbondedcutoff']} "
+        # command += f"{get_flag(self.parser, '--cutoffmethod')} {arg_dict['--cutoffmethod']} "
+        # if arg_dict['--periodic'] is True:
+        #     command += f"{get_flag(self.parser, '--periodic')} "
+        # command += f"{get_flag(self.parser, '--minimise')} "
+        # command += f"{get_flag(self.parser, '--water')} {arg_dict['--water']} "
+        # command += f"{get_flag(self.parser, '--seed')} {arg_dict['--seed']} "
+        # command += f"{get_flag(self.parser, '--name')} {arg_dict['--name']} "
+        # command += f"{get_flag(self.parser, '--directory')} {arg_dict['--directory']} "
+        # command += f"{get_flag(self.parser, '--equilibrate')} {arg_dict['--equilibrate']} "
+
+        # return command
 
     #  ================================== HELPER FUNCTIONS ===================================
     def _init_output_dir(self) -> str:
@@ -216,17 +339,17 @@ class OpenMMSimulation:
 
             output_dir = None
             # If no output directory specified, use default
-            if not self.args.name and not self.args.dir:
+            if not self.args.name and not self.args.directory:
                 output_dir = os.path.join("../exp/outputs", exp_name_auto)
             # If output name specified, use that
-            elif self.args.name and not self.args.dir:
+            elif self.args.name and not self.args.directory:
                 output_dir = os.path.join("../exp/outputs", self.args.name)
             # If output directory specified, use that
-            elif self.args.dir and not self.args.name:
-                output_dir = os.path.join(self.args.dir, exp_name_auto)
+            elif self.args.directory and not self.args.name:
+                output_dir = os.path.join(self.args.directory, exp_name_auto)
             # If both name and directory specified, use both
-            elif self.args.dir and self.args.name:
-                output_dir = os.path.join(self.args.dir, self.args.name)
+            elif self.args.directory and self.args.name:
+                output_dir = os.path.join(self.args.directory, self.args.name)
 
             try:
                 # Make output directory
@@ -289,12 +412,12 @@ class OpenMMSimulation:
                 pass
             else:
                 # If no water present and the use has specified using a water model
-                if self.args.watermodel:
+                if self.args.water:
                     # Automatically add water to the modeller
                     # print("No water found in PDB file: Adding water...")
                     modeller.addSolvent(
                         self.force_field,
-                        model=self.args.watermodel,
+                        model=self.args.water,
                         padding=self.args.solventpadding,
                     )
                 else:
@@ -317,7 +440,7 @@ class OpenMMSimulation:
             open(os.path.join(self.output_dir, f"{topology_name}"), "w"),
         )
         # If water in the system, then save an additional topology file with without water:
-        if self.args.watermodel != "":
+        if self.args.water != "":
             modeller_copy = copy.deepcopy(modeller)
             modeller_copy.deleteWater()
             pdb.writeFile(
@@ -414,19 +537,7 @@ class OpenMMSimulation:
         """
         Minimises the system energy.
         """
-        # print("\nInitial system energy")
-        # print(
-        #    self.simulation.simulation.context.getState(
-        #        getEnergy=True
-        #    ).getPotentialEnergy()
-        # )
         self.simulation.simulation.minimizeEnergy()
-        # print("\nAfter minimization")
-        # print(
-        #    self.simulation.simulation.context.getState(
-        #        getEnergy=True
-        #    ).getPotentialEnergy()
-        # )
         positions = self.simulation.simulation.context.getState(
             getPositions=True
         ).getPositions()
@@ -620,7 +731,7 @@ class OpenMMSimulation:
             "-f",
             "--savefreq",
             default="1ps",
-            help="Interval for all reporters to save data",
+            help="Interval for all reporters to save chemicals",
         )
         parser.add_argument(
             "-s", "--stepsize", default="2fs", help="Integrator step size"
@@ -750,3 +861,5 @@ class OpenMMSimulation:
                     f"Production directory to resume must contain files with the following names: {resume_requires}"
                 )
                 quit()
+
+        print("[✓] Checked arguments")
