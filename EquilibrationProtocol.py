@@ -97,7 +97,7 @@ class EquilibrationProtocol:
             system,
             integrator,
             platform,
-            properties,
+            # properties,
         )
 
         # Run simulation

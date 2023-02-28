@@ -1,3 +1,4 @@
+from abc import abstractmethod
 import os
 import argparse
 import sys
@@ -19,86 +20,22 @@ import seaborn as sns
 import mdtraj as md
 
 from utils.trajectory_utils import clean_and_align_trajectory
-from utils.openmm_utils import parse_args, parse_quantity, cutoff_method, get_unit_cell_dims, add_barostat, \
-    get_integrator, SystemObjs, get_flag, SimulationProps, stringify_named_tuple, check_fields_unchanged, \
+from utils.openmm_utils import parse_quantity, get_system_args, cutoff_method, get_unit_cell_dims, add_barostat, \
+    get_integrator, SystemObjs, SimulationProps, stringify_named_tuple, check_fields_unchanged, \
     update_numerical_fields
 from EquilibrationProtocol import EquilibrationProtocol
 
 
-class PDBSimulation(OpenMMSimulation):
+# Turns a dictionary into a class
+class Dict2Class(object):
+      
+    def __init__(self, my_dict):
+          
+        for key in my_dict:
+            setattr(self, key, my_dict[key])
 
-    def _init_model(self) -> app.PDBFile:
-        """
-        Initialises the model from a PDB file.
-        Specifies in the PDB object whether periodic boundary conditions are used.
-        :return: PDB object
-        """
-        pdb = app.PDBFile(self.args.pdb)
-        if self.args.periodic is False:
-            # print("Setting non-periodic boundary conditions")
-            pdb.topology.setPeriodicBoxVectors(None)
-
-        return pdb
-
-
-class MOL2Simulation(OpenMMSimulation):
-
-    def _init_model(self):
-        """
-        Initialises the model from a MOL2 file.
-        """
-        ligand_traj = md.load(self.args.pdb)
-        ligand_traj.center_coordinates()
-        ligand_xyz = ligand_traj.openmm_positions(0)
-        ligand_top = ligand_traj.top.to_openmm()
-
-        return ligand_top, ligand_xyz
-
-    def _init_forcefield(self) -> app.ForceField:
-        """
-        Initialises the forcefield object.
-        :return: Forcefield object
-        """
-        if self.args.forcefield == "amber14":  # Create AMBER system
-            self.force_field = app.ForceField("amber14-all.xml", xml_filename, "amber14/tip3p.xml")
-        elif self.args.forcefield == "charmm36":  # Create CHARMM system
-            self.force_field = app.ForceField("charmm36.xml", xml_filename, "charmm36/water.xml")
-        else:
-            raise ValueError(f"Force field {self.args.forcefield} not supported.")
-
-        return self.force_field
-
-    def _init_modeller(self, pdb: app.PDBFile) -> app.Modeller:
-        # TODO: modify
-        """
-        Initialises the Modeller object.
-        :param pdb: PDB object
-        :return: Modeller object
-        """
-        modeller = app.Modeller(pdb.topology, pdb.positions)
-        if self.args.resume:
-            # print("Resuming simulation, skipping modeller modifications")
-            pass
-        else:
-            # Check if the loaded topology file already has water
-            if np.any([atom.residue.name == 'HOH' for atom in pdb.topology.atoms()]):
-                # print("Water found in PBD file: Not changing solvation properties; solvent padding ignored!")
-                pass
-            else:
-                # If no water present and the use has specified using a water model
-                if self.args.water:
-                    # Automatically add water to the modeller
-                    # print("No water found in PDB file: Adding water...")
-                    modeller.addSolvent(
-                        self.force_field,
-                        model=self.args.water,
-                        padding=self.args.solventpadding,
-                    )
-                else:
-                    # Do not add water to the modeller
-                    pass
-
-        return modeller
+    def __str__(self):
+        return str(self.__dict__)
 
 
 class OpenMMSimulation:
@@ -126,31 +63,38 @@ class OpenMMSimulation:
         self.force_field = None
 
         # ARGUMENTS
-        self.SPECIAL_ARGS = {
-        'resume': {'flag': '', 'optional': True},
-        '--gpu': {'flag': '--gpu', 'optional': True},
-        '--pressure': {'flag': '--pressure', 'optional': True},
-        '--periodic': {'flag': '--periodic', 'optional': True}
+        self.BOOLEAN_ARGS = {
+        'periodic': {'flag': '--periodic'},
+        'minimise': {'flag': '--minimise'},
         }
 
         # Parser and arg check
         self.parser = self._init_parser()
-        self.args = self.parser.parse_args()
-        if not any(vars(self.args)):
-            # No arguments were given
-            pass
+
+        try:
+            args = self.parser.parse_args()
+            self.args = get_system_args(args)
+        except SystemExit:
+            # No arguments were passed
+            self.args = {}
         else:
-            # Arguments were given, check them
+            # Check that the arguments are valid
             self._check_args()
+            
+            
 
     def from_args(self, args: dict):
         """
         Initialises the simulation object from a dictionary of arguments and checks them.
         """
-        #  TODO: debug this method
-        for field in self.parser.__dict__:
+        arg_list = [action.dest for action in self.parser._actions]
+        for field in arg_list:
             if field in args:
-                setattr(self.args, field, args[field])
+                self.args[field] = args[field]
+            else:
+                self.args[field] = None
+        self.args = Dict2Class(self.args)
+        self.args = get_system_args(self.args)
         self._check_args()
 
         return self
@@ -174,18 +118,34 @@ class OpenMMSimulation:
         """
         self._init_output_dir()
         print("[✓] Created output directory")
-        pdb = self._init_pdb()
-        print("[✓] Initialised PDB file")
+        model = self._init_model()
+        print("[✓] Initialised model file(s)")
         self._init_forcefield()
         print("[✓] Initialised force field")
-        modeller = self._init_modeller(pdb)
+        modeller = self._init_modeller(model)
         print("[✓] Initialised modeller")
-        self._write_pdbs(pdb, modeller)
+        self._write_updated_model(model, modeller)
         system = self._init_system(modeller)
         print("[✓] Created system")
-        self.system = SystemObjs(pdb, modeller, system)
+        self.system = SystemObjs(model, modeller, system)
 
         return self.system
+
+    @abstractmethod
+    def _init_model(self):
+        pass
+
+    @abstractmethod
+    def _init_forcefield(self) -> app.ForceField:
+        pass
+
+    @abstractmethod
+    def _init_modeller(self, model) -> app.Modeller:
+        pass
+
+    @abstractmethod
+    def _write_updated_model(self, model, modeller: app.Modeller):
+        pass
 
     def setup_simulation(self):
         """
@@ -258,69 +218,38 @@ class OpenMMSimulation:
         :param arg_dict: Dictionary of arguments
         :return: String of command
         """
-        #  TODO: debug this method
-
-        # Generate command
         command = "python /home/dominic/PycharmProjects/CV_learning/run_openmm.py "
 
-        # Iterate over argument names and their flags
-        for arg_name, arg_flag in self.parser._option_string_actions.items():
-            if arg_name in self.SPECIAL_ARGS:
+        # Add required arguments
+        required_args = [act.dest for act in self.parser._positionals._actions 
+                         if len(act.option_strings) == 0]
+        for arg_name in required_args:
+            try:
+                command += f"{args[arg_name]} "
+            except KeyError:
+                raise KeyError(f"Required argument {arg_name} not found in args dict")
+
+        # Add optional arguments
+        encountered_args = set()
+        for _, arg in self.parser._option_string_actions.items():
+            arg_name = arg.dest
+            arg_flag = arg.option_strings[-1]
+            if arg_name in encountered_args:
+                continue
+            encountered_args.add(arg_name)
+
+            if arg_name in self.BOOLEAN_ARGS:
+                if (arg_name in args) and (args[arg_name] == True):
+                    command += f"{self.BOOLEAN_ARGS[arg_name]['flag']} "
+                else:
+                    pass
                 continue
 
-            # Check if argument is required or optional
-            if arg_flag.required:
-                command += f"{args[arg_name]} "
-            else:
-                flag = f"{self.parser.prefix_chars[0]}{arg_name.lstrip(self.parser.prefix_chars)}"
-                command += f"{flag} {args[arg_name]} "
-
-        # Add special arguments
-        for arg_name, arg_info in self.SPECIAL_ARGS.items():
-            if arg_name in args:
-                if arg_info['optional']:
-                    command += f"{arg_info['flag']} {args[arg_name]} "
-                else:
-                    command += f"{args[arg_name]} "
+            if arg_name in args and args[arg_name] is not None:
+                # Only add argument to command if it exists in args
+                command += f"{arg_flag} {args[arg_name]} "
 
         return command
-
-
-        # Add required arguments
-        # command += arg_dict['pdb'] + " "
-        # command += arg_dict['forcefield'] + " "
-        # command += arg_dict['precision'] + " "
-
-        # # Add optional arguments
-        # try:
-        #     command += arg_dict['resume'] + " "
-        # except KeyError:
-        #     pass
-        # command += f"{get_flag(self.parser, '--PLUMED')} {arg_dict['--PLUMED']} "
-        # try:
-        #     command += f"{get_flag(self.parser, '--gpu')} {arg_dict['--gpu']} "
-        # except KeyError:
-        #     pass
-        # command += f"{get_flag(self.parser, '--duration')} {arg_dict['--duration']} "
-        # command += f"{get_flag(self.parser, '--savefreq')} {arg_dict['--savefreq']} "
-        # command += f"{get_flag(self.parser, '--stepsize')} {arg_dict['--stepsize']} "
-        # command += f"{get_flag(self.parser, '--temperature')} {arg_dict['--temperature']} "
-        # if arg_dict['--pressure'] != "":
-        #     command += f"{get_flag(self.parser, '--pressure')} {arg_dict['--pressure']} "
-        # command += f"{get_flag(self.parser, '--frictioncoeff')} {arg_dict['--frictioncoeff']} "
-        # command += f"{get_flag(self.parser, '--solventpadding')} {arg_dict['--solventpadding']} "
-        # command += f"{get_flag(self.parser, '--nonbondedcutoff')} {arg_dict['--nonbondedcutoff']} "
-        # command += f"{get_flag(self.parser, '--cutoffmethod')} {arg_dict['--cutoffmethod']} "
-        # if arg_dict['--periodic'] is True:
-        #     command += f"{get_flag(self.parser, '--periodic')} "
-        # command += f"{get_flag(self.parser, '--minimise')} "
-        # command += f"{get_flag(self.parser, '--water')} {arg_dict['--water']} "
-        # command += f"{get_flag(self.parser, '--seed')} {arg_dict['--seed']} "
-        # command += f"{get_flag(self.parser, '--name')} {arg_dict['--name']} "
-        # command += f"{get_flag(self.parser, '--directory')} {arg_dict['--directory']} "
-        # command += f"{get_flag(self.parser, '--equilibrate')} {arg_dict['--equilibrate']} "
-
-        # return command
 
     #  ================================== HELPER FUNCTIONS ===================================
     def _init_output_dir(self) -> str:
@@ -368,100 +297,16 @@ class OpenMMSimulation:
         self.output_dir = output_dir
         return self.output_dir
 
-    def _init_pdb(self) -> app.PDBFile:
-        """
-        Initialises the PDB object.
-        Specifies in the PDB object whether periodic boundary conditions are used.
-        :return: PDB object
-        """
-        pdb = app.PDBFile(self.args.pdb)
-        if self.args.periodic is False:
-            # print("Setting non-periodic boundary conditions")
-            pdb.topology.setPeriodicBoxVectors(None)
-
-        return pdb
-
-    def _init_forcefield(self) -> app.ForceField:
-        """
-        Initialises the forcefield object.
-        :return: Forcefield object
-        """
-        if self.args.forcefield == "amber14":  # Create AMBER system
-            self.force_field = app.ForceField("amber14-all.xml", "amber14/tip3p.xml")
-        elif self.args.forcefield == "charmm36":  # Create CHARMM system
-            self.force_field = app.ForceField("charmm36.xml", "charmm36/water.xml")
-        else:
-            raise ValueError(f"Force field {self.args.forcefield} not supported.")
-
-        return self.force_field
-
-    def _init_modeller(self, pdb: app.PDBFile) -> app.Modeller:
-        """
-        Initialises the Modeller object.
-        :param pdb: PDB object
-        :return: Modeller object
-        """
-        modeller = app.Modeller(pdb.topology, pdb.positions)
-        if self.args.resume:
-            # print("Resuming simulation, skipping modeller modifications")
-            pass
-        else:
-            # Check if the loaded topology file already has water
-            if np.any([atom.residue.name == 'HOH' for atom in pdb.topology.atoms()]):
-                # print("Water found in PBD file: Not changing solvation properties; solvent padding ignored!")
-                pass
-            else:
-                # If no water present and the use has specified using a water model
-                if self.args.water:
-                    # Automatically add water to the modeller
-                    # print("No water found in PDB file: Adding water...")
-                    modeller.addSolvent(
-                        self.force_field,
-                        model=self.args.water,
-                        padding=self.args.solventpadding,
-                    )
-                else:
-                    # Do not add water to the modeller
-                    pass
-
-        return modeller
-
-    def _write_pdbs(self, pdb: app.PDBFile, modeller: app.Modeller,
-                    topology_name: str = 'top.pdb', no_water_topology_name: str = 'top_no_water.pdb') -> None:
-        """
-        Writes hydrated and non-hydrated PDB object(s) to the output directory.
-        :param pdb: PDB object
-        :param modeller: Modeller object
-        """
-        # Create a topology file of system (+ water), as it is saved in the dcd:
-        pdb.writeFile(
-            modeller.getTopology(),
-            modeller.getPositions(),
-            open(os.path.join(self.output_dir, f"{topology_name}"), "w"),
-        )
-        # If water in the system, then save an additional topology file with without water:
-        if self.args.water != "":
-            modeller_copy = copy.deepcopy(modeller)
-            modeller_copy.deleteWater()
-            pdb.writeFile(
-                modeller_copy.getTopology(),
-                modeller_copy.getPositions(),
-                open(os.path.join(self.output_dir, f"{no_water_topology_name}"), "w"),
-            )
-            del modeller_copy
-
     def _init_system(self, modeller: app.Modeller):
         """
         Initialises the system object. If using PLUMED, adds the PLUMED force to the system.
         :param modeller: Modeller object
         :return: System object
         """
-        # print(f"System size: {modeller.topology.getNumAtoms()}")
         system = self.force_field.createSystem(
             modeller.topology,
             nonbondedMethod=cutoff_method[self.args.cutoffmethod],
-            nonbondedCutoff=self.args.nonbondedcutoff,
-            # constraints = app.AllBonds,
+            nonbondedCutoff=self.args.nonbondedcutoff,   # constraints can be added here
         )
         if self.args.plumed:
             with open(self.args.plumed, "r") as plumed_file:
@@ -469,7 +314,7 @@ class OpenMMSimulation:
             path = Path(self.args.plumed)
             os.chdir(path.parent.absolute())
             system.addForce(PlumedForce(plumed_script))
-            print("[✓] Added PLUMED forces")
+            print("[✓] Added PLUMED forces")   
 
         return system
 
@@ -488,9 +333,6 @@ class OpenMMSimulation:
 
         if self.args.pressure is None:
             # If no pressure provided, run an NVT simulation
-            # print(
-            #     f"Running NVT simulation at temperature {self.args.temperature}."
-            # )
             pass
         else:
             # If pressure provided, run an NPT simulation
@@ -499,7 +341,6 @@ class OpenMMSimulation:
                          system=self.system.system,
                          pressure=self.args.pressure,
                          temperature=self.args.temperature)
-            # print(f"Running NPT simulation at temperature {self.args.temperature} and pressure {self.args.pressure}.")
 
         integrator = get_integrator(integrator_type="LangevinIntegrator", args=self.args)
 
@@ -517,8 +358,8 @@ class OpenMMSimulation:
             self.system.modeller.topology,
             self.system.system,
             integrator,
-            platform,
-            properties,
+            platform=platform,
+            # platformProperties=properties,
         )
 
         # Set initial particle positions
@@ -541,11 +382,12 @@ class OpenMMSimulation:
         positions = self.simulation.simulation.context.getState(
             getPositions=True
         ).getPositions()
-        self.system.pdb.writeModel(
-            self.system.modeller.topology,
-            positions,
-            open(os.path.join(self.output_dir, "minimised.pdb"), "w"),
-        )
+        # TODO: fix to allow writing of minimised PDB
+        # self.system.pdb.writeModel(
+        #     self.system.modeller.topology,
+        #     positions,
+        #     open(os.path.join(self.output_dir, "minimised.pdb"), "w"),
+        # )
         self.system.modeller.positions = positions
 
     def _save_simulation_metadata(self):
@@ -557,14 +399,13 @@ class OpenMMSimulation:
 
         # If resuming, load existing metadata and update
         if self.args.resume:
-            # print('Updating metadata')
+            # Updating metadata
             system_args_dict = self._update_metadata_file(system_args_dict)
             # Cumulate duration and total_steps from previous runs
             self.args.duration = parse_quantity(system_args_dict['duration'])
             self.args.total_steps = int(self.args.duration / self.args.stepsize)
 
         # Save metadata
-        # print(system_args_dict)
         with open(os.path.join(self.output_dir, self.METADATA_FN), "w") as json_file:
             json.dump(system_args_dict, json_file)
 
@@ -704,8 +545,10 @@ class OpenMMSimulation:
             "pdb",
             help="(file) PDB file describing topology and positions.",
         )
-        parser.add_argument("forcefield", help=f"Forcefield/Potential to use: {self.valid_force_fields}")
-        parser.add_argument("precision", help=f"Precision to use: {self.valid_precisions}")
+        parser.add_argument("forcefield", 
+            help=f"Forcefield/Potential to use: {self.valid_force_fields}")
+        parser.add_argument("precision", 
+            help=f"Precision to use: {self.valid_precisions}")
         parser.add_argument(
             "-r",
             "--resume",
@@ -787,7 +630,7 @@ class OpenMMSimulation:
             help="Minimises energy before running the simulation (recommended)",
         )
         parser.add_argument(
-            "-w", "--water", default="", help=f"(str) The water model: {self.valid_water_models}"
+            "-w", "--watermodel", default="", help=f"(str) The water model: {self.valid_water_models}"
         )
         parser.add_argument("-seed", "--seed", default='0', help="Random seed")
         parser.add_argument("-name", "--name", default=None, help="(str) Name of simulation. "
@@ -820,13 +663,13 @@ class OpenMMSimulation:
             )
             quit()
 
-        if self.args.watermodel not in self.valid_water_models and not "":
+        if (self.args.watermodel is not None) and (self.args.watermodel not in self.valid_water_models):
             print(
                 f"Invalid water model: {self.args.watermodel}, must be {self.valid_water_models}"
             )
             quit()
 
-        if self.args.watermodel != "" and self.args.watermodel != "tip3p":
+        if (self.args.watermodel is not None) and (self.args.watermodel != "tip3p"):
             raise NotImplementedError(f"Unsupported water model: {self.args.watermodel}, only tip3p supported for now")
 
         if self.args.resume is not None and not os.path.isdir(
@@ -847,6 +690,12 @@ class OpenMMSimulation:
             )
             quit()
 
+        if self.args.equilibrate is "NPT" and self.args.pressure is None:
+            print(
+                f"Invalid ensemble: {self.args.equilibrate}, must specify pressure"
+            )
+            quit()
+
         if self.args.resume:
             resume_contains = os.listdir(self.args.resume)
             resume_requires = (
@@ -863,3 +712,147 @@ class OpenMMSimulation:
                 quit()
 
         print("[✓] Checked arguments")
+
+
+class PDBSimulation(OpenMMSimulation):
+
+    def _init_model(self):
+        """
+        Initialises the model from a PDB file.
+        Specifies in the PDB object whether periodic boundary conditions are used.
+        :return: PDB object
+        """
+        model = app.PDBFile(self.args.pdb)
+        if self.args.periodic is False:
+            # print("Setting non-periodic boundary conditions")
+            model.topology.setPeriodicBoxVectors(None)
+
+        return model
+    
+    def _init_forcefield(self) -> app.ForceField:
+        """
+        Initialises the forcefield object.
+        :return: Forcefield object
+        """
+        if self.args.forcefield == "amber14":  # Create AMBER system
+            self.force_field = app.ForceField("amber14-all.xml", "amber14/tip3p.xml")
+        elif self.args.forcefield == "charmm36":  # Create CHARMM system
+            self.force_field = app.ForceField("charmm36.xml", "charmm36/water.xml")
+        else:
+            raise ValueError(f"Force field {self.args.forcefield} not supported.")
+
+        return self.force_field
+
+    def _init_modeller(self, model: app.PDBFile) -> app.Modeller:
+        """
+        Initialises the Modeller object.
+        :param model: PDB object
+        :return: Modeller object
+        """
+        modeller = app.Modeller(model.topology, model.positions)
+        if self.args.resume:
+            # Resuming simulation, skipping modeller modifications
+            pass
+        else:
+            # Check if the loaded topology file already has water
+            if np.any([atom.residue.name == 'HOH' for atom in model.topology.atoms()]):
+                print("Water found in PBD file: Not changing solvation properties; solvent padding ignored!")
+                pass
+            else:
+                # If no water present and the use has specified using a water model
+                if self.args.water:
+                    # Automatically add water to the modeller
+                    modeller.addSolvent(
+                        self.force_field,
+                        model=self.args.water,
+                        padding=self.args.solventpadding,
+                    )
+                else:
+                    # Do not add water to the modeller
+                    pass
+
+        return modeller
+    
+    def _write_updated_model(self, model: app.PDBFile, modeller: app.Modeller,
+                    topology_name: str = 'top.pdb', no_water_topology_name: str = 'top_no_water.pdb') -> None:
+        """
+        Writes hydrated and non-hydrated PDB object(s) to the output directory.
+        :param pdb: PDB object
+        :param modeller: Modeller object
+        """
+        # Create a topology file of system (+ water), as it is saved in the dcd:
+        model.writeFile(
+            modeller.getTopology(),
+            modeller.getPositions(),
+            open(os.path.join(self.output_dir, f"{topology_name}"), "w"),
+        )
+        # If water in the system, then save an additional topology file with without water:
+        if self.args.watermodel:
+            modeller_copy = copy.deepcopy(modeller)
+            modeller_copy.deleteWater()
+            model.writeFile(
+                modeller_copy.getTopology(),
+                modeller_copy.getPositions(),
+                open(os.path.join(self.output_dir, f"{no_water_topology_name}"), "w"),
+            )
+            del modeller_copy
+
+
+class MOL2Simulation(OpenMMSimulation):
+
+    def _init_model(self):
+        """
+        Initialises the model from a MOL2 file.
+        """
+        ligand_traj = md.load(self.args.pdb)
+        ligand_traj.center_coordinates()
+        ligand_xyz = ligand_traj.openmm_positions(0)
+        ligand_top = ligand_traj.top.to_openmm()
+
+        return ligand_top, ligand_xyz
+
+    def _init_forcefield(self) -> app.ForceField:
+        """
+        Initialises the forcefield object.
+        :return: Forcefield object
+        """
+        if self.args.forcefield == "amber14":  # Create AMBER system
+            self.force_field = app.ForceField("amber14-all.xml", xml_filename, "amber14/tip3p.xml")
+        elif self.args.forcefield == "charmm36":  # Create CHARMM system
+            self.force_field = app.ForceField("charmm36.xml", xml_filename, "charmm36/water.xml")
+        else:
+            raise ValueError(f"Force field {self.args.forcefield} not supported.")
+
+        return self.force_field
+
+    def _init_modeller(self, pdb: app.PDBFile) -> app.Modeller:
+        # TODO: modify
+        """
+        Initialises the Modeller object.
+        :param pdb: PDB object
+        :return: Modeller object
+        """
+        modeller = app.Modeller(pdb.topology, pdb.positions)
+        if self.args.resume:
+            # print("Resuming simulation, skipping modeller modifications")
+            pass
+        else:
+            # Check if the loaded topology file already has water
+            if np.any([atom.residue.name == 'HOH' for atom in pdb.topology.atoms()]):
+                # print("Water found in PBD file: Not changing solvation properties; solvent padding ignored!")
+                pass
+            else:
+                # If no water present and the use has specified using a water model
+                if self.args.water:
+                    # Automatically add water to the modeller
+                    # print("No water found in PDB file: Adding water...")
+                    modeller.addSolvent(
+                        self.force_field,
+                        model=self.args.water,
+                        padding=self.args.solventpadding,
+                    )
+                else:
+                    # Do not add water to the modeller
+                    pass
+
+        return modeller
