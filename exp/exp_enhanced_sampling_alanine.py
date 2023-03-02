@@ -5,20 +5,22 @@ sys.path.append('/home/dominic/PycharmProjects/CV_learning')
 import mdfeature.features as features
 from EnhancedSamplingExperiments import EnhancedSamplingExperiments
 
-openmm_parameters = {'--duration': '50ns',
-                     '--savefreq': '50ps',
-                     '--stepsize': '1fs',
-                     '--frictioncoeff': '1ps',
+openmm_parameters = {'duration': '50ns',
+                     'savefreq': '50ps',
+                     'stepsize': '1fs',
+                     'frictioncoeff': '1ps',
                      'precision': 'mixed',
-                     '--water': 'tip3p',
-                     '--temperature': '300K',
-                     '--pressure': '',
-                     '--nonbondedcutoff': '0.8nm',
-                     '--solventpadding': '1nm',
-                     '--cutoffmethod': 'CutoffPeriodic',
-                     '--periodic': True,
+                     'watermodel': 'tip3p',
+                     'temperature': '300K',
+                     'pressure': '',
+                     'nonbondedcutoff': '0.8nm',
+                     'solventpadding': '1nm',
+                     'cutoffmethod': 'CutoffPeriodic',
+                     'periodic': True,
                      'forcefield': 'amber14',
-                     '--equilibrate': 'NVT',
+                     'equilibrate': 'NVT',
+                     'integrator': 'Langevin',
+                     'gpu': 0,
                      }
 meta_d_parameters = {'gaussian_height': 1.2,
                      'gaussian_pace': 500,  # 500 * stepsize = 1ps
@@ -91,7 +93,7 @@ if __name__ == "__main__":
     #     openmm_parameters=openmm_parameters,
     #     meta_d_parameters=meta_d_parameters,
     #     features=feature_list,
-    #     cos_sin=True,
+    #     cos_sin=False,
     #     subtract_feature_means=False,
     #     num_cv_features=2,
     # )
@@ -155,7 +157,7 @@ if __name__ == "__main__":
         features=extended_feature_list,
         subtract_feature_means=False,
         cos_sin=True,
-        feature_dimensions=4,
+        num_cv_features=4,
     )
     alanine_exp.initialise_hills_and_PLUMED()
     alanine_exp.run_openmm_experiments()
@@ -173,7 +175,7 @@ if __name__ == "__main__":
         features=extended_feature_list,
         subtract_feature_means=False,
         cos_sin=True,
-        feature_dimensions=4,
+        num_cv_features=4,
         lagtime=1,
     )
     alanine_exp.initialise_hills_and_PLUMED()
@@ -192,7 +194,7 @@ if __name__ == "__main__":
         features=extended_feature_list,
         subtract_feature_means=False,
         cos_sin=True,
-        feature_dimensions=4,
+        num_cv_features=4,
         lagtime=1,
     )
     alanine_exp.initialise_hills_and_PLUMED()

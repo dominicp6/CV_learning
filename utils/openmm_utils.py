@@ -1,5 +1,6 @@
 import argparse
 from collections import namedtuple
+from typing import Union
 
 import openmm
 import openmm.app as app
@@ -8,12 +9,12 @@ import openmm.unit as unit
 
 SystemArgs = namedtuple(
     "System_Args",
-    "pdb forcefield resume plumed duration savefreq stepsize temperature pressure "
+    "forcefield precision pdb mol2 xml resume plumed duration savefreq stepsize temperature pressure "
     "frictioncoeff solventpadding nonbondedcutoff cutoffmethod total_steps steps_per_save "
-    "periodic gpu minimise precision water seed name directory equilibrate",
+    "periodic gpu minimise watermodel seed name directory equilibrate integrator",
 )
 
-SystemObjs = namedtuple("System_Objs", "pdb modeller system")
+SystemObjs = namedtuple("System_Objs", "model modeller system")
 
 SimulationProps = namedtuple("Simulation_Props", "integrator simulation properties")
 
@@ -68,15 +69,24 @@ def isnumber(s: str):
         return False
 
 
-def parse_quantity(s: str):
-    if isnumber(s):
+def parse_quantity(s: Union[int, float, str, None]):
+    if isinstance(s, (int, float)):
+        # Already a number
+        return s
+    elif s is None:
+        # Empty quantity 
+        return None
+    elif isnumber(s):
+        # Pure numeric
         return float(s)
     try:
+        # Unit conversion
         u = s.lstrip("0123456789.")
         v = s[: -len(u)]
         return unit.Quantity(float(v), unit_labels[u])
     except Exception:
-        raise ValueError(f"Invalid quantity: {s}")
+        # Return original string
+        return s
 
 
 def round_format_quantity(quantity: unit.Quantity, significant_figures: int):
@@ -93,11 +103,10 @@ def get_flag(parser: argparse.ArgumentParser, argument: str):
     return parser._option_string_actions[argument].option_strings[0]
 
 
-def get_unit_cell_dims(modeller: app.Modeller, periodic: bool, nonbondedcutoff: unit.Quantity):
+def get_unit_cell_dims(modeller: app.Modeller):
     unit_cell_dims = modeller.getTopology().getUnitCellDimensions()
-    if periodic:
-        # print(f"Unit cell dimensions: {unit_cell_dims}, Cutoff distance: {nonbondedcutoff}.")
-        pass
+    print(f"Unit cell dimensions: {unit_cell_dims}")
+
     return unit_cell_dims
 
 
@@ -111,11 +120,15 @@ def add_barostat(pressure, temperature, system, barostat_type="MonteCarloBarosta
     system.addForce(barostat)
 
 
-def get_integrator(args: SystemArgs, integrator_type="LangevinIntegrator"):
-    if integrator_type == "LangevinIntegrator":
+def get_integrator(args: Union[SystemArgs, dict], integrator_type="Langevin"):
+    if integrator_type == "Langevin":
         integrator = openmm.LangevinMiddleIntegrator(
             args.temperature,
             args.frictioncoeff,
+            args.stepsize,
+        )
+    elif integrator_type == "Verlet":
+        integrator = openmm.VerletIntegrator(
             args.stepsize,
         )
     else:
@@ -124,13 +137,12 @@ def get_integrator(args: SystemArgs, integrator_type="LangevinIntegrator"):
     return integrator
 
 
-def parse_args(parser):
+def get_system_args(args):
     """
     Parse command line arguments.
 
     :return: Dictionary of arguments
     """
-    args = parser.parse_args()
     duration = parse_quantity(args.duration)
     savefreq = parse_quantity(args.savefreq)
     stepsize = parse_quantity(args.stepsize)
@@ -149,10 +161,13 @@ def parse_args(parser):
            f"({cutoffmethod}). Please change the cutoff method to either 'NoCutoff' or 'CutoffNonPeriodic'."
 
     systemargs = SystemArgs(
-        args.pdb,
         args.forcefield.lower(),
+        args.precision.lower(),
+        args.pdb,
+        args.mol2,
+        args.xml,
         args.resume,
-        args.PLUMED,
+        args.plumed,
         duration,
         savefreq,
         stepsize,
@@ -167,12 +182,12 @@ def parse_args(parser):
         periodic,
         args.gpu,
         args.minimise,
-        args.precision.lower(),
-        args.water,
-        int(args.seed),
+        args.watermodel,
+        int(args.seed) if args.seed else None,
         args.name,
         args.directory,
-        args.equilibrate
+        args.equilibrate,
+        args.integrator
     )
 
     return systemargs

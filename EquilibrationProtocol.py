@@ -64,9 +64,7 @@ class EquilibrationProtocol:
         system = deepcopy(self.system)
 
         # Set up simulation
-        unit_cell_dims = get_unit_cell_dims(modeller=self.modeller,
-                                            periodic=self.args.periodic,
-                                            nonbondedcutoff=self.args.nonbondedcutoff)
+        unit_cell_dims = self.modeller.getTopology().getUnitCellDimensions()
 
         if simulation_type == "NVE":
             raise NotImplementedError
@@ -81,7 +79,7 @@ class EquilibrationProtocol:
         else:
             raise ValueError(f"Invalid simulation type: {simulation_type}")
 
-        integrator = get_integrator(args=self.args, integrator_type="LangevinIntegrator")
+        integrator = get_integrator(args=self.args, integrator_type="Langevin")
         properties = {}
 
         if self.args.gpu is not "":

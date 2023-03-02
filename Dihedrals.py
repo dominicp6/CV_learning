@@ -193,15 +193,11 @@ class Dihedral:
             self.periodic = f"{minimum},{maximum}"
 
     def torsion_label(self):
-        # only output one torsion label per sin-cos pair
-        if self.sincos == "sin" or self.sincos == "":
-            return (
-                "TORSION ATOMS="
-                + ",".join(str(i + 1) for i in self.atom_indices)
-                + f" LABEL={self.dihedral_base_label} "
-            )
-        else:
-            return None
+        return (
+            "TORSION ATOMS="
+            + ",".join(str(i + 1) for i in self.atom_indices)
+            + f" LABEL={self.dihedral_base_label} "
+        )
 
     def transformer_label(self):
         if self.offset != 0.0:
@@ -257,10 +253,9 @@ class Dihedrals:
             self.dihedral_labels.append(dihedral.dihedral_label)
 
     def write_torsion_labels(self, file):
-        for dihedral in self.dihedral_objs:
-            output = dihedral.torsion_label()
-            if output is not None:
-                file.writelines(output + "\n")
+        dihedral_labels = set()
+        [dihedral_labels.add(dihedral.torsion_label()) for dihedral in self.dihedral_objs]
+        [file.writelines(label + "\n") for label in dihedral_labels]
 
     def write_transform_labels(self, file):
         for dihedral in self.dihedral_objs:

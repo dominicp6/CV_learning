@@ -5,7 +5,7 @@
 
    Author: Dominic Phillips (dominicp6)
 """
-
+import contextlib
 import os
 import subprocess
 import time as time
@@ -16,9 +16,9 @@ from datetime import timedelta
 import numpy as np
 
 from Experiment import Experiment
-from OpenMMSimulation import OpenMMSimulation
+from OpenMMSimulation import PDBSimulation
 from utils.general_utils import count_files, list_files
-from utils.feature_utils import get_cv_type_and_dim
+from utils.feature_utils import get_cv_type_and_dim, get_features_and_coefficients
 
 
 class EnhancedSamplingExperiments:
@@ -38,7 +38,6 @@ class EnhancedSamplingExperiments:
             **kwargs,
     ):
         """
-
 
         :param output_dir: Directory to store all simulation outputs.
         :param unbiased_exp: Path to the unbiased experiment to use as a template for the metadynamics experiments
@@ -83,9 +82,9 @@ class EnhancedSamplingExperiments:
                     raise ValueError(f"CV type {cv_type} not recognised.")
 
         os.chdir(self.output_dir)
-        OpenMMSimulation()._check_argument_dict(openmm_parameters)
+        # OpenMMSimulation()._check_argument_dict(openmm_parameters)
         self.openmm_params = openmm_parameters
-        self.openmm_params["--directory"] = self.output_dir
+        self.openmm_params["directory"] = self.output_dir
         self.meta_d_params = meta_d_parameters
 
         self.eta = None
@@ -111,6 +110,7 @@ class EnhancedSamplingExperiments:
 
     # 1)
     def initialise_hills_and_PLUMED(self):
+        features, coefficients = get_features_and_coefficients(self.exp, self.CVs, self.num_cv_features)
         for pdb_file in list_files(self.starting_structures, 'pdb'):
             for repeat in range(self.number_of_repeats):
                 exp_name = self.get_exp_name(self.CVs, pdb_file, repeat)
@@ -118,6 +118,8 @@ class EnhancedSamplingExperiments:
                 open(f"{self.output_dir}/{exp_name}/HILLS", "w")
                 open(f"{self.output_dir}/{exp_name}/COLVAR", "w")
                 self.exp.create_plumed_metadynamics_script(CVs=self.CVs,
+                                                           features=features,
+                                                           coefficients=coefficients,
                                                            filename=f"{self.output_dir}/{exp_name}/plumed.dat",
                                                            exp_name=exp_name,
                                                            gaussian_height=self.meta_d_params['gaussian_height'],
@@ -127,7 +129,6 @@ class EnhancedSamplingExperiments:
                                                            temperature=self.meta_d_params['temperature'],
                                                            sigma_list=self.meta_d_params['sigma_list'],
                                                            normalised=self.meta_d_params['normalised'],
-                                                           feature_dimensions=self.num_cv_features,
                                                            subtract_feature_means=self.subtract_feature_means,
                                                            print_to_terminal=False)
         self.initialised = True
@@ -141,11 +142,16 @@ class EnhancedSamplingExperiments:
                 self.progress_logger(ti, tf)
                 ti = time.time()
                 exp_name = self.get_exp_name(self.CVs, pdb_file, repeat)
-                self.openmm_params["--seed"] = repeat
-                self.openmm_params["--name"] = exp_name
-                self.openmm_params["--PLUMED"] = f"{self.output_dir}/{exp_name}/plumed.dat"
-                f = open(f"{self.output_dir}/{exp_name}/output.log", "w")
-                subprocess.call(OpenMMSimulation().generate_executable_command(self.openmm_params), shell=True, stdout=f)
+                self.openmm_params["seed"] = repeat
+                self.openmm_params["name"] = exp_name
+                self.openmm_params["plumed"] = f"{self.output_dir}/{exp_name}/plumed.dat"
+                simulation = PDBSimulation().from_args(self.openmm_params)
+                with open(f"{self.output_dir}/{exp_name}/output.log", "w") as f:
+                    with contextlib.redirect_stdout(f):
+                        try:
+                            simulation.run()
+                        except Exception:
+                            print(f"Error in experiment {exp_name}, terminated early.")
                 tf = time.time()
                 self.exps_ran += 1
 

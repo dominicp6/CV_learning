@@ -434,6 +434,8 @@ class Experiment:
     def create_plumed_metadynamics_script(
             self,
             CVs: list[str],
+            features: list[list[str]],
+            coefficients: list[list[float]],
             filename: str = 'plumed.dat',
             exp_name: str = 'exp',
             gaussian_height: float = 0.2,
@@ -443,7 +445,6 @@ class Experiment:
             temperature: float = 300,
             sigma_list: Optional[list[float]] = None,
             normalised: bool = True,
-            feature_dimensions: int = None,
             print_to_terminal: bool = True,
             subtract_feature_means: bool = False,
     ):
@@ -461,9 +462,6 @@ class Experiment:
         :param temperature: Temperature for well-tempered metadynamics.
         :param sigma_list: List of sigmas for each CV. If None, defaults to 0.1 for each CV.
         :param normalised:  Whether to use normalised CVs.
-        :param feature_dimensions: Number of features to use when constructing the CV. Uses a greedy algorithm for
-        finding a linear regression of a subset of features that have a high correlation with the underlying CV. If
-        None, defaults to using all features.
         :param print_to_terminal: Whether to print the script to the terminal.
         :param subtract_feature_means: Whether to subtract the mean of each feature when defining it in the PLUMED script.
         """
@@ -485,8 +483,6 @@ class Experiment:
             f = open(file_name, "w")
             output = 'RESTART'
             f.write(output + "\n")
-
-            features, coefficients = get_features_and_coefficients(self, CVs, feature_dimensions)
 
             # Union of all features appearing in the CVs
             relevant_features = list({f for feat in features for f in feat})
