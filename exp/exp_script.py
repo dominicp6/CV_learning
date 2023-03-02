@@ -1,35 +1,36 @@
-import subprocess
+import sys
+sys.path.append('/home/dominic/PycharmProjects/CV_learning')
+from OpenMMSimulation import PDBSimulation, MOL2Simulation
 
-SCRIPT_DIR = '../..'
-DATA_DIR = '../chemicals/chignolin'
-DURATION = '2ns'
-SAVE_FRQ = '10ps'
-STEP_SIZE = '2fs'
-FRIC_COEFF = '1ps'
-PRECISION = 'mixed'
-WATER = 'tip3p'
-TEMP = '300K'
-PRESSURE = '1.0bar'
-CUTOFF_DIST = '1.0nm'
-SOLV_PADDING = '1nm'
-CUTOFF_METHOD = 'CutoffPeriodic'
-FORCE_FIELD = "charmm36"
-SEED = "0"
-NAME = "chignolin_equilibration_test"
-DIR = None
-periodic = True
-EQUIL = "NPT"
+simulation_params = {
+    'forcefield': 'amber14',
+    'precision': 'mixed',
+    'pdb': '/home/dominic/PycharmProjects/CV_learning/exp/data/alanine/alanine-processed.pdb',
+    'resume': None,
+    'PLUMED': None,
+    'gpu': '0,1',
+    'duration': '50ns',
+    'savefreq': '0.1ps',
+    'stepsize': '1fs',
+    'temperature': '300K',
+    'pressure': '1bar',
+    'frictioncoeff':  '1ps',
+    'solventpadding': '1nm',
+    'nonbondedcutoff': '0.7nm',
+    'cutoffmethod': 'CutoffPeriodic',
+    'periodic': True,
+    'minimise': True,
+    'watermodel': None,
+    'seed': None,
+    'name': 'test',
+    'directory': '/home/dominic/PycharmProjects/CV_learning/exp/exp',
+    'equilibrate':  'NPT',
+    'integrator': 'Langevin',
+}
 
 
-# TODO: Saving water in trajectory
-# TODO: Check water model correctly saved to metadata?
-
-pr = '-pr' if periodic else ''
-subprocess.call(
-    f"python {SCRIPT_DIR}/run_openmm.py {DATA_DIR}/minimised.pdb {FORCE_FIELD} {PRECISION} -d {DURATION} "
-    f"-c {FRIC_COEFF} -f {SAVE_FRQ} -s {STEP_SIZE} -t {TEMP} -p {PRESSURE} -sp {SOLV_PADDING} -nbc {CUTOFF_DIST} "
-    f"-cm {CUTOFF_METHOD} {pr} -m -w {WATER} -name {NAME} -equilibrate {EQUIL}",
-    shell=True,
-)
+if __name__ == '__main__':
+    simulation = PDBSimulation().from_args(args=simulation_params)
+    simulation.run()
 
 

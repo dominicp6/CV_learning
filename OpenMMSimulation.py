@@ -388,8 +388,11 @@ class OpenMMSimulation:
             self.system.system,
             integrator,
             platform=platform,
-            # platformProperties=properties,
+            platformProperties=properties,
         )
+
+        if self.args.gpu.count(",") > 0:
+            print(f"[✓] Multiple GPUs ({self.args.gpu})")
 
         # Set initial particle positions
         simulation.context.setPositions(self.system.modeller.positions)
