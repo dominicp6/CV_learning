@@ -5,6 +5,7 @@ from typing import Union
 import openmm
 import openmm.app as app
 import openmm.unit as unit
+from openmmtools import integrators
 
 
 SystemArgs = namedtuple(
@@ -120,8 +121,14 @@ def add_barostat(pressure, temperature, system, barostat_type="MonteCarloBarosta
     system.addForce(barostat)
 
 
-def get_integrator(args: Union[SystemArgs, dict], integrator_type="Langevin"):
-    if integrator_type == "Langevin":
+def get_integrator(args: Union[SystemArgs, dict], integrator_type="LangevinBAOAB"):
+    if integrator_type == "LangevinBAOAB":
+        integrator = integrators.LangevinIntegrator(
+            args.temperature,
+            args.frictioncoeff,
+            args.stepsize,
+        )
+    if integrator_type == "LangevinMiddle":
         integrator = openmm.LangevinMiddleIntegrator(
             args.temperature,
             args.frictioncoeff,

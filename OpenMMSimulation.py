@@ -683,7 +683,7 @@ class OpenMMSimulation:
         parser.add_argument("-equilibrate", "--equilibrate", default=None,
                             help="(str) Target production ensemble NVE/NVT/NPT")
         parser.add_argument("-integrator", "--integrator", default='Langevin',
-                            help="(str) The type of numerical integrator to use, either 'Langevin' or 'Verlet'.")
+                            help="(str) The type of numerical integrator to use, either 'LangevinBAOAB', 'LangevinMiddle' or 'Verlet'.")
 
         return parser
 

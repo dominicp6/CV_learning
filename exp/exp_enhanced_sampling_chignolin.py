@@ -18,7 +18,7 @@ openmm_parameters = {'duration': '50ns',
                      'periodic': True,
                      'forcefield': 'amber14',
                      'equilibrate': 'NVT',
-                     'integrator': 'Langevin',
+                     'integrator': 'LangevinBAOAB',
                      #'gpu': 0,
                      }
 meta_d_parameters = {'gaussian_height': 1.2,
