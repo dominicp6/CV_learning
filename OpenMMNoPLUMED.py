@@ -6,13 +6,11 @@ import warnings
 from datetime import datetime
 import json
 import copy
-from pathlib import Path
 from typing import Union
 
 import numpy as np
 import openmm
 import openmm.app as app
-from openmmplumed import PlumedForce
 from openmmml import MLPotential
 import pandas as pd
 
@@ -29,9 +27,8 @@ from EquilibrationProtocol import EquilibrationProtocol
 
 # Turns a dictionary into a class
 class Dict2Class(object):
-      
+
     def __init__(self, my_dict):
-          
         for key in my_dict:
             setattr(self, key, my_dict[key])
 
@@ -69,8 +66,9 @@ class OpenMMSimulation:
 
         # BOOLEAN ARGUMENTS
         self.BOOLEAN_ARGS = {
-        'periodic': {'flag': '--periodic'},
-        'minimise': {'flag': '--minimise'},
+            'periodic': {'flag': '--periodic'},
+            'minimise': {'flag': '--minimise'},
+            'state_data': {'flag': '--state_data'},
         }
 
         # Parser and arg check
@@ -170,16 +168,18 @@ class OpenMMSimulation:
                         self.force_field,
                         model=self.args.watermodel,
                         padding=self.args.solventpadding,
+                        numAdded=self.args.num_water,
+                        ionicStrength=self.args.ionic_strength
                     )
                 else:
-                    # Else do not add water 
+                    # Else do not add water
                     pass
 
         return modeller
 
     @abstractmethod
     def _write_updated_model(self, model: Union[app.PDBFile, Dict2Class], modeller: app.Modeller,
-                    topology_name: str = 'top.pdb', no_water_topology_name: str = 'top_no_water.pdb') -> None:
+                             topology_name: str = 'top.pdb', no_water_topology_name: str = 'top_no_water.pdb') -> None:
         raise NotImplementedError
 
     def setup_simulation(self):
@@ -254,7 +254,7 @@ class OpenMMSimulation:
         command = "python /home/dominic/PycharmProjects/CV_learning/run_openmm.py "
 
         # Add required arguments
-        required_args = [act.dest for act in self.parser._positionals._actions 
+        required_args = [act.dest for act in self.parser._positionals._actions
                          if len(act.option_strings) == 0]
         for arg_name in required_args:
             try:
@@ -345,19 +345,6 @@ class OpenMMSimulation:
         Initialises the system object. If using PLUMED, adds the PLUMED force to the system.
         """
         return NotImplementedError
-    
-    def _add_plumed_force(self, system):
-        """
-        Adds a PLUMED force to the system.
-        """
-        with open(self.args.plumed, "r") as plumed_file:
-            plumed_script = plumed_file.read()
-            path = Path(self.args.plumed)
-            os.chdir(path.parent.absolute())
-            system.addForce(PlumedForce(plumed_script))
-            print("[✓] Added PLUMED forces")   
-
-        return system
 
     def _init_simulation(self):
         """
@@ -393,7 +380,6 @@ class OpenMMSimulation:
             platform = openmm.Platform.getPlatformByName("CPU")
 
         # Create simulation object using the specified integrator
-        # TODO: fix multi-GPU support
         simulation = app.Simulation(
             self.system.modeller.topology,
             self.system.system,
@@ -477,24 +463,25 @@ class OpenMMSimulation:
             )
         )
         # Reporter to log info to csv
-        self.simulation.simulation.reporters.append(
-            app.StateDataReporter(
-                os.path.join(self.output_dir, self.STATE_DATA_FN),
-                self.args.steps_per_save,
-                step=True,
-                time=True,
-                speed=True,
-                temperature=True,
-                potentialEnergy=True,
-                kineticEnergy=True,
-                totalEnergy=True,
-                volume=True
-                if self.args.pressure
-                else False,  # record volume and density for NPT simulations
-                density=True if self.args.pressure else False,
-                append=True if self.args.resume else False,
+        if self.args.state_data:
+            self.simulation.simulation.reporters.append(
+                app.StateDataReporter(
+                    os.path.join(self.output_dir, self.STATE_DATA_FN),
+                    self.args.steps_per_save,
+                    step=True,
+                    time=True,
+                    speed=True,
+                    temperature=True,
+                    potentialEnergy=True,
+                    kineticEnergy=True,
+                    totalEnergy=True,
+                    volume=True
+                    if self.args.pressure
+                    else False,  # record volume and density for NPT simulations
+                    density=True if self.args.pressure else False,
+                    append=True if self.args.resume else False,
+                )
             )
-        )
         # Reporter to save trajectory
         # (Saves only a subset of atoms to the trajectory, ignores water)
         self.simulation.simulation.reporters.append(
@@ -555,16 +542,15 @@ class OpenMMSimulation:
         with open(os.path.join(self.output_dir, "summary_statistics.json"), "w") as f:
             json.dump(statistics, f)
 
-
     #  ================================== PARSER FUNCTIONS ===================================
     def _init_parser(self):
         parser = argparse.ArgumentParser(
             description="Production run for an equilibrated biomolecule."
         )
-        parser.add_argument("forcefield", 
-            help=f"Forcefield/Potential to use: {self.valid_force_fields}")
-        parser.add_argument("precision", 
-            help=f"Precision to use: {self.valid_precisions}")
+        parser.add_argument("forcefield",
+                            help=f"Forcefield/Potential to use: {self.valid_force_fields}")
+        parser.add_argument("precision",
+                            help=f"Precision to use: {self.valid_precisions}")
         parser.add_argument(
             "-pdb",
             "--pdb",
@@ -640,6 +626,18 @@ class OpenMMSimulation:
                  "The unit but not the value will be converted to its reciprocal.",
         )
         parser.add_argument(
+            "-num_water",
+            "--num_water",
+            default=None,
+            help="Number of water molecules to add to the system",
+        )
+        parser.add_argument(
+            "-ionic_strength",
+            "--ionic_strength",
+            default=None,
+            help="The total concentration of ions, both positive and negative, (in M) to add to the system. "
+        )
+        parser.add_argument(
             "-sp",
             "--solventpadding",
             default="1nm",
@@ -680,9 +678,13 @@ class OpenMMSimulation:
                                                                       "If not provided, a directory will be generated.")
         parser.add_argument("-equilibrate", "--equilibrate", default=None,
                             help="(str) Target production ensemble NVE/NVT/NPT")
+        parser.add_argument("-equilibration_length", "--equilibration_length", default='0.1ns',
+                            help="Duration of equilibration (e.g. 0.1ns)")
         parser.add_argument("-integrator", "--integrator", default='Langevin',
-                            help="(str) The type of numerical integrator to use, either 'LangevinBAOAB', 'LangevinMiddle' or 'Verlet'.")
-
+                            help="(str) The type of numerical integrator to use, either 'LangevinBAOAB', "
+                                 "'LangevinMiddle' or 'Verlet'.")
+        parser.add_argument("-state_data", "--state_data", action=argparse.BooleanOptionalAction,
+                            help="Whether to save state data in addition to the trajectory.")
         return parser
 
     @abstractmethod
@@ -719,6 +721,19 @@ class OpenMMSimulation:
         if self.args.resume is not None and self.args.plumed is not None:
             warnings.warn("Using a PLUMED script with a resumed simulation is experimental and may be buggy.",
                           UserWarning)
+
+        if ((self.args.num_water is not None) or (self.args.ionic_strength is not None)
+            or (self.args.solventpadding is not None)) and (self.args.watermodel is None):
+            print(
+                f"Error: Must specify a water model to add water and ions or introduce solvent padding."
+            )
+            quit()
+
+        if self.args.num_water is not None and self.args.solventpadding is not None:
+            print(
+                f"Error: Cannot specify both number of water molecules and solvent padding."
+            )
+            quit()
 
         if self.args.equilibrate not in self.valid_ensembles:
             print(
@@ -758,7 +773,7 @@ class PDBSimulation(OpenMMSimulation):
         model = app.PDBFile(self.args.pdb)
 
         return model
-    
+
     def _init_forcefield(self, model):
         files = self.forcefield_files[self.args.forcefield]
         self.force_field = app.ForceField(*files)
@@ -767,15 +782,13 @@ class PDBSimulation(OpenMMSimulation):
         system = self.force_field.createSystem(
             modeller.topology,
             nonbondedMethod=cutoff_method[self.args.cutoffmethod],
-            nonbondedCutoff=self.args.nonbondedcutoff,   # constraints can be added here
+            nonbondedCutoff=self.args.nonbondedcutoff,  # constraints can be added here
         )
-        if self.args.plumed:
-            system = self._add_plumed_force(system)
 
         return system
 
     def _write_updated_model(self, model: Union[app.PDBFile, Dict2Class], modeller: app.Modeller,
-                    topology_name: str = 'top.pdb', no_water_topology_name: str = 'top_no_water.pdb'):
+                             topology_name: str = 'top.pdb', no_water_topology_name: str = 'top_no_water.pdb'):
         """
         Writes hydrated and non-hydrated PDB object(s) to the output directory.
         :param pdb: PDB object
@@ -825,15 +838,13 @@ class MOL2Simulation(OpenMMSimulation):
         system = self.force_field.createSystem(
             modeller.topology,
             nonbondedMethod=cutoff_method[self.args.cutoffmethod],
-            nonbondedCutoff=self.args.nonbondedcutoff,   # constraints can be added here
+            nonbondedCutoff=self.args.nonbondedcutoff,  # constraints can be added here
         )
-        if self.args.plumed:
-            system = self._add_plumed_force(system)
 
         return system
 
     def _write_updated_model(self, model: Union[app.PDBFile, Dict2Class], modeller: app.Modeller,
-                    topology_name: str = 'top.pdb', no_water_topology_name: str = 'top_no_water.pdb') -> None:
+                             topology_name: str = 'top.pdb', no_water_topology_name: str = 'top_no_water.pdb') -> None:
         pass
 
     def _additional_checks(self):
@@ -849,8 +860,10 @@ class MOL2Simulation(OpenMMSimulation):
             quit()
 
         if self.args.cutoffmethod != "NoCutoff":
-            print("Error: Specifying a cutoff method other than 'NoCutoff' is not currently supported for MOL2 simulations.")
+            print(
+                "Error: Specifying a cutoff method other than 'NoCutoff' is not currently supported for MOL2 simulations.")
             quit()
+
 
 class MLSimulation(OpenMMSimulation):
 
@@ -862,17 +875,17 @@ class MLSimulation(OpenMMSimulation):
     def _init_forcefield(self, model):
         files = self.forcefield_files[self.args.forcefield]
         self.force_field = app.ForceField(*files)
-        # topology = Topology.from_openmm(model.topology, unique_molecules=[Molecule.from_file(self.args.sdf)])
-        # molecule = Molecule.from_topology(topology)
-        # smirnoff = SMIRNOFFTemplateGenerator(molecule)
-        # self.force_field.registerTemplateGenerator(smirnoff.generator)
+        topology = Topology.from_openmm(model.topology, unique_molecules=[Molecule.from_file(self.args.sdf)])
+        molecule = Molecule.from_topology(topology)
+        smirnoff = SMIRNOFFTemplateGenerator(molecule)
+        self.force_field.registerTemplateGenerator(smirnoff.generator)
 
     def _init_system(self, modeller: app.Modeller):
         # Initialise the system with the standard forcefield
         mm_system = self.force_field.createSystem(
             modeller.topology,
             nonbondedMethod=cutoff_method[self.args.cutoffmethod],
-            nonbondedCutoff=self.args.nonbondedcutoff,   # constraints can be added here
+            nonbondedCutoff=self.args.nonbondedcutoff,  # constraints can be added here
         )
 
         # Check that each ml_residue is present in the topology
@@ -891,10 +904,6 @@ class MLSimulation(OpenMMSimulation):
         # Add the ML system to the standard forcefield system
         system = potential.createMixedSystem(modeller.topology, mm_system, ml_atoms)
 
-        # Add the PLUMED force if required
-        if self.args.plumed:
-            system = self._add_plumed_force(system)
-
         return system
 
     def _additional_checks(self):
@@ -911,11 +920,20 @@ class MLSimulation(OpenMMSimulation):
             quit()
 
     def _write_updated_model(self, model: Union[app.PDBFile, Dict2Class], modeller: app.Modeller,
-                    topology_name: str = 'top.pdb', no_water_topology_name: str = 'top_no_water.pdb') -> None:
-        pass
-
-
-
-
-
-
+                             topology_name: str = 'top.pdb', no_water_topology_name: str = 'top_no_water.pdb') -> None:
+        # Create a topology file of system (+ water), as it is saved in the dcd:
+        model.writeFile(
+            modeller.getTopology(),
+            modeller.getPositions(),
+            open(os.path.join(self.output_dir, f"{topology_name}"), "w"),
+        )
+        # If water in the system, then save an additional topology file with without water:
+        if self.args.watermodel:
+            modeller_copy = copy.deepcopy(modeller)
+            modeller_copy.deleteWater()
+            model.writeFile(
+                modeller_copy.getTopology(),
+                modeller_copy.getPositions(),
+                open(os.path.join(self.output_dir, f"{no_water_topology_name}"), "w"),
+            )
+            del modeller_copy

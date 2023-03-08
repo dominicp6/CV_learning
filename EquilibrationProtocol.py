@@ -1,52 +1,49 @@
 import os
+import time
 from copy import deepcopy
 
 import openmm
 import openmm.app as app
+import pandas as pd
 
-from utils.openmm_utils import parse_quantity, SystemArgs, cutoff_method, get_unit_cell_dims, add_barostat, \
-    get_integrator
+from utils.openmm_utils import parse_quantity, SystemArgs, cutoff_method, add_barostat, \
+    get_integrator, make_graphs
 
 
 class EquilibrationProtocol:
     def __init__(self,
                  production_ensemble: str,
-                 force_field: app.ForceField,
+                 system: openmm.System,
                  modeller: app.Modeller,
-                 simulation: app.Simulation,
                  args: SystemArgs,
                  output_dir: str,
                  fixed_density: bool = True):
-        self.simulation = simulation
+
         self.output_dir = output_dir
-        self.force_field = force_field
         self.modeller = modeller
         self.args = args
-        self.system = self.force_field.createSystem(
-            modeller.topology,
-            nonbondedMethod=cutoff_method[self.args.cutoffmethod],
-            nonbondedCutoff=self.args.nonbondedcutoff,
-        )
+        self.system = system
         self.simulation_sequence = []
+        equilibration_length = self.args.equilibration_length
 
         if production_ensemble == "NVE":
             # 1. Short NVT simulation to relax to temperature of interest
             # 2. Short NVE equilibration
-            self.simulation_sequence = (("NVT", "0.1ns"), ("NVE", "0.1ns"))
+            self.simulation_sequence = (("NVT", equilibration_length), ("NVE", equilibration_length))
         elif production_ensemble == "NVT":
             if fixed_density:
                 # 1. Short NVT simulation to relax to temperature of interest
-                self.simulation_sequence = (("NVT", "0.1ns"),)
+                self.simulation_sequence = (("NVT", equilibration_length),)
             else:
                 # 1. Short NVT simulation to relax to temperature of interest
                 # 2. Short NPT simulation to relax to density of interest
                 # 3. Short NPT simulation to calculate average box size
                 # 4. Short NVT equilibration
-                self.simulation_sequence = (("NVT", "0.1ns"), ("NPT", "0.1ns"), ("NPT", "0.1ns"), ("NVT", "0.1ns"))
+                self.simulation_sequence = (("NVT", equilibration_length), ("NPT", equilibration_length), ("NPT", equilibration_length), ("NVT", equilibration_length))
         elif production_ensemble == "NPT":
             # 1. Short NVT simulation to relax to temperature of interest
             # 2. Short NPT simulation to relax to density of interest
-            self.simulation_sequence = (("NVT", "0.1ns"), ("NPT", "0.1ns"))
+            self.simulation_sequence = (("NVT", equilibration_length), ("NPT", equilibration_length))
         else:
             raise ValueError(f"Invalid production ensemble: {production_ensemble}")
 
@@ -79,7 +76,7 @@ class EquilibrationProtocol:
         else:
             raise ValueError(f"Invalid simulation type: {simulation_type}")
 
-        integrator = get_integrator(args=self.args, integrator_type="Langevin")
+        integrator = get_integrator(args=self.args, integrator_type="LangevinBAOAB")
         properties = {}
 
         if self.args.gpu is not "":
@@ -95,22 +92,46 @@ class EquilibrationProtocol:
             system,
             integrator,
             platform,
-            # properties,
+            properties,
+        )
+
+        # Add reporter
+        simulation.reporters.append(
+            app.StateDataReporter(
+                os.path.join(self.output_dir, f"equilibration_{simulation_id}.log"),
+                100, # steps per save
+                step=True,
+                time=True,
+                speed=True,
+                temperature=True,
+                potentialEnergy=True,
+                kineticEnergy=True,
+                totalEnergy=True,
+                volume=True
+                if self.args.pressure
+                else False,  # record volume and density for NPT simulations
+                density=True if self.args.pressure else False,
+                append=True if self.args.resume else False,
+            )
         )
 
         # Run simulation
         if simulation_id == 0:
-            # If this is the first equilibration simulation, we need to set the initial conditions
+            assert simulation_type == "NVT", "First equilibration simulation must be NVT, regardless of production ensemble."
             simulation.context.setPositions(self.modeller.positions)
-            simulation.context.setVelocitiesToTemperature(self.args.temperature)
             simulation.step(total_steps)
         else:
             # If this is not the first equilibration simulation, we can just continue from the previous checkpoint
             simulation.loadCheckpoint(os.path.join(self.output_dir, f"equilibration_{simulation_id - 1}.chk"))
             simulation.step(total_steps)
 
+        # Make graphs
+        report = pd.read_csv(os.path.join(self.output_dir, f"equilibration_{simulation_id}.log"))
+        make_graphs(report, self.args.stepsize, self.output_dir, name=f"equilibration_{simulation_id}")
+
         # Save state
         if simulation_id < max_simulation_id:
             simulation.saveCheckpoint(f"{self.output_dir}/equilibration_{simulation_id}.chk")
         else:
             simulation.saveCheckpoint(f"{self.output_dir}/equilibration_final.chk")
+

@@ -1,4 +1,5 @@
 import argparse
+import os
 from collections import namedtuple
 from typing import Union
 
@@ -6,13 +7,17 @@ import openmm
 import openmm.app as app
 import openmm.unit as unit
 from openmmtools import integrators
+import matplotlib.pyplot as plt
+import matplotlib.ticker as tkr
+import seaborn as sns
+
 
 
 SystemArgs = namedtuple(
     "System_Args",
-    "forcefield precision pdb mol2 xml resume plumed duration savefreq stepsize temperature pressure "
-    "frictioncoeff solventpadding nonbondedcutoff cutoffmethod total_steps steps_per_save "
-    "periodic gpu minimise watermodel seed name directory equilibrate integrator",
+    "forcefield precision pdb mol2 sdf xml ml_residues resume plumed duration savefreq stepsize temperature pressure "
+    "frictioncoeff num_water ionic_strength solventpadding nonbondedcutoff cutoffmethod total_steps steps_per_save "
+    "periodic gpu minimise watermodel seed name directory equilibrate equilibration_length integrator state_data",
 )
 
 SystemObjs = namedtuple("System_Objs", "model modeller system")
@@ -29,6 +34,7 @@ unit_labels = {
     "nm": unit.nanometers,
     "bar": unit.bar,
     "K": unit.kelvin,
+    "mol": unit.molar,
 }
 
 cutoff_method = {
@@ -128,7 +134,7 @@ def get_integrator(args: Union[SystemArgs, dict], integrator_type="LangevinBAOAB
             args.frictioncoeff,
             args.stepsize,
         )
-    if integrator_type == "LangevinMiddle":
+    elif integrator_type == "LangevinMiddle":
         integrator = openmm.LangevinMiddleIntegrator(
             args.temperature,
             args.frictioncoeff,
@@ -142,6 +148,23 @@ def get_integrator(args: Union[SystemArgs, dict], integrator_type="LangevinBAOAB
         raise NotImplementedError(f"Integrator type {integrator_type} not implemented.")
 
     return integrator
+
+
+def make_graphs(report, stepsize, output_dir, name='graphs'):
+    report = report.melt()
+    with sns.plotting_context("paper"):
+        g = sns.FacetGrid(data=report, row="variable", sharey=False)
+        g.map(plt.plot, "value")
+        # format the labels with f-strings
+        for ax in g.axes.flat:
+            ax.xaxis.set_major_formatter(
+                tkr.FuncFormatter(
+                    lambda x, p: f"{(x * stepsize).value_in_unit(unit.nanoseconds):.1f}ns"
+                )
+            )
+        plt.savefig(
+            os.path.join(output_dir, f"{name}.png"), bbox_inches="tight"
+        )
 
 
 def get_system_args(args):
@@ -172,7 +195,9 @@ def get_system_args(args):
         args.precision.lower(),
         args.pdb,
         args.mol2,
+        args.sdf,
         args.xml,
+        args.ml_residues.split(",") if args.ml_residues else None,
         args.resume,
         args.plumed,
         duration,
@@ -181,7 +206,9 @@ def get_system_args(args):
         parse_quantity(args.temperature),
         parse_quantity(args.pressure) if args.pressure else None,
         frictioncoeff,
-        parse_quantity(args.solventpadding),
+        int(args.num_water) if args.num_water else None,
+        parse_quantity(args.ionic_strength) if args.ionic_strength else None,
+        parse_quantity(args.solventpadding) if args.solventpadding else None,
         parse_quantity(args.nonbondedcutoff),
         cutoffmethod,
         total_steps,
@@ -194,7 +221,9 @@ def get_system_args(args):
         args.name,
         args.directory,
         args.equilibrate,
-        args.integrator
+        args.equilibration_length,
+        args.integrator,
+        args.state_data
     )
 
     return systemargs
