@@ -12,11 +12,11 @@ import json
 import copy
 import re
 import csv
+import subprocess
 from time import time
 from typing import Union, Optional
 
 import mdtraj
-import pyemma
 import deeptime
 import numpy as np
 import matplotlib.pyplot as plt
@@ -28,80 +28,23 @@ from deeptime.plots import plot_implied_timescales
 from tqdm import tqdm
 from scipy.spatial import Voronoi
 
-from KramersRateEvaluator import KramersRateEvaluator
-from MarkovStateModel import MSM
+# from KramersRateEvaluator import KramersRateEvaluator
+# from MarkovStateModel import MSM
 from Dihedrals import Dihedrals
-from utils.diffusion_utils import free_energy_estimate_2D, my_fit_dm
-import pydiffmap.diffusion_map as dfm
+from utils.diffusion_utils import my_fit_dm
+# import pydiffmap.diffusion_map as dfm
 from utils.plot_utils import voronoi_plot_2d
-from utils.experiment_utils import write_metadynamics_line, get_metadata_file, load_pdb, load_trajectory
-from utils.general_utils import supress_stdout, assert_kwarg, remove_nans, print_file_contents
+from utils.experiment_utils import write_metadynamics_line, get_metadata_file, load_pdb, load_trajectory, get_fe_trajs, \
+    BiasTrajectory, scatter_fes, contour_fes, get_feature_ids_from_names, initialise_featurizer, \
+    generate_reweighting_file, execute_reweighting_script, load_reweighted_trajectory
+from utils.general_utils import supress_stdout, assert_kwarg, print_file_contents
 from utils.openmm_utils import parse_quantity, time_to_iteration_conversion
 from utils.plotting_functions import init_plot, init_multiplot, save_fig
-from utils.feature_utils import compute_best_fit_feature_eigenvector, get_features_and_coefficients, \
-    get_cv_type_and_dim, get_feature_means
+from utils.feature_utils import compute_best_fit_feature_eigenvector, get_cv_type_and_dim, get_feature_means
 
 
 # TODO: fix free energy plot to make it work correctly with collective variables
 # TODO: think what is happening to water molecules in the trajectory
-# TODO: possibly replace with mdtraj featurizer
-def initialise_featurizer(
-        features: Union[dict, list[str], np.array], topology, cos_sin=False
-) -> pyemma.coordinates.featurizer:
-    featurizer = pyemma.coordinates.featurizer(topology)
-    # If features is a dictionary, then we need the specified dihedral features
-    if isinstance(features, dict):
-        dihedral_indices = np.array(features.values())
-        featurizer.add_dihedrals(dihedral_indices, cossin=cos_sin)
-    # If features is a list of str, then we add all features of the specified type(s)
-    elif isinstance(features, list):
-        if "dihedrals" in features:
-            # Add all backbone dihedrals
-            featurizer.add_backbone_torsions(cossin=cos_sin)
-        if "carbon_alpha" in features:
-            # Add the distances between all carbon alpha atoms to the featurizer
-            if len(featurizer.select_Ca()) < 2:
-                print(f"WARNING: Not enough carbon alpha atoms found in topology to form carbon_alpha features "
-                      f"(needed at least 2, found {len(featurizer.select_Ca())}).")
-            else:
-                featurizer.add_distances_ca()
-        if "sidechain_torsions" in features:
-            # Add all sidechain torsions
-            try:
-                featurizer.add_sidechain_torsions(cossin=cos_sin)
-            except ValueError:
-                print("WARNING: No sidechain torsions found in topology.")
-        if any([feat not in ["dihedrals", "carbon_alpha", "sidechain_torsions"] for feat in features]):
-            raise ValueError("Unrecognised feature type(s) provided. Allowed types are: dihedrals, carbon_alpha, "
-                             "sidechain_torsions.")
-    elif isinstance(features, np.ndarray):
-        # If features is a numpy array, then we assume it is a list of dihedral indices
-        featurizer.add_dihedrals(features, cossin=cos_sin)
-    else:
-        raise ValueError(
-            f"Invalid value for dihedral features: '{features}'. "
-        )
-    featurizer.describe()
-    return featurizer
-
-
-def get_feature_ids_from_names(
-        feature_names: list[str],
-        featurizer: pyemma.coordinates.featurizer,
-):
-    all_features = featurizer.describe()
-    feature_ids = []
-    for feature in feature_names:
-        feature_ids.append(all_features.index(feature))
-
-    return feature_ids
-
-
-def get_feature_mask(feature: str, featurizer: pyemma.coordinates.featurizer):
-    all_features = featurizer.describe()
-    feature_mask = np.zeros(len(all_features), dtype=int)
-    feature_mask[all_features.index(feature)] = 1
-    return feature_mask
 
 
 class Experiment:
@@ -110,7 +53,7 @@ class Experiment:
             location: str,
             features: Optional[Union[dict, list[str], np.array]] = None,
             cos_sin: bool = False,
-            metad_bias_file=None,
+            in_progress: bool = False,
     ):
         # ================== DEFAULTS =====================
         self.DM_DEFAULTS = {
@@ -140,7 +83,10 @@ class Experiment:
             "options": None,
         }
         # ================================================
+        self.in_progress = in_progress
         self.location = location
+        # Change the working directory to the experiment directory
+        os.chdir(self.location)
         (
             self.temperature,
             self.duration,
@@ -155,9 +101,7 @@ class Experiment:
             self.traj,
             self.num_frames,
         ) = self._init_datafiles(location)
-        (self.metad_weights, self.bias_potential_traj) = self.__init_biasfiles(
-            metad_bias_file
-        )
+        self.bias_trajectory = self.__init_biasfiles()
         (
             self.feature_dict,
             self.featurizer,
@@ -170,7 +114,7 @@ class Experiment:
 
         self.CV_types = ['PCA', 'TICA', 'VAMP', 'DMD', 'DM']
         self.CVs = {"PCA": None, "TICA": None, "VAMP": None, "DMD": None, "DM": None}
-        self.kre = KramersRateEvaluator()
+        # self.kre = KramersRateEvaluator()
         self.discrete_traj = None
 
     def get_features(self):
@@ -181,7 +125,7 @@ class Experiment:
 
     def free_energy_plot(
             self,
-            features: list[str],
+            features: list[str] = None,
             feature_nicknames: Optional[list[str]] = None,
             nan_threshold: int = 50,
             save_name="free_energy_plot",
@@ -191,21 +135,49 @@ class Experiment:
             save_data: bool = True,
             show_fig: bool = True,
             close_fig: bool = True,
+            fig_size=(6, 4),
             ax=None,
+            reweight: bool = False,
     ):
-        feature_nicknames = self._check_fes_arguments(features, feature_nicknames)
-        fig, ax = init_plot("Free Energy Surface", f"${feature_nicknames[0]}$", f"${feature_nicknames[1]}$", ax=ax)
-        # get traj of features and trim to chemicals fraction
-        feature_traj = self.get_feature_trajs_from_names(features)[:int(data_fraction * self.num_frames)]
-        if self.bias_potential_traj:
-            # biased experiments require contour plots
-            ax, im = self._contour_fes(ax, feature_traj)
+        if not self.bias_trajectory and reweight:
+            raise ValueError("Cannot reweight unbiased experiments, please set reweight=False.")
+
+        if self.bias_trajectory:
+            if data_fraction != 1.0:
+                raise NotImplementedError("Trimming data not implemented for biased experiments, "
+                                          "please set data_fraction=1.0.")
+            if reweight:
+                assert features is not None, "Must provide features for reweighting"
+                # TODO: replace by a check looking into the plumed.dat file
+                feature_nicknames = features
+                fig, ax = init_plot("Free Energy Surface", f"{feature_nicknames[0]}", f"{feature_nicknames[1]}",
+                                    ax=ax, figsize=fig_size)
+                generate_reweighting_file(os.path.join(self.location, 'plumed.dat'),
+                                          os.path.join(self.location, 'plumed_reweight.dat'),
+                                          feature1=feature_nicknames[0], feature2=feature_nicknames[1],
+                                          stride=50, bandwidth=0.05, grid_bin=50, grid_min=-3.141592653589793,
+                                          grid_max=3.141592653589793,
+                                          )
+                execute_reweighting_script(self.location, 'trajectory.dcd', 'plumed_reweight.dat', kT=1/self.beta._value)
+                bias_traj = load_reweighted_trajectory(self.location)
+                ax, im = contour_fes(self.beta, ax, bias_traj)
+            else:
+                fig, ax = init_plot("Free Energy Surface", f"CV 1", f"CV 2", ax=ax, figsize=fig_size)
+                feature_nicknames = ["CV 1", "CV 2"]
+                # biased experiments require contour plots
+                ax, im = contour_fes(self.beta, ax, self.bias_trajectory)
         else:
+            assert features is not None, "Must provide features for unbiased experiments"
             # unbiased experiments require scatter plots
-            ax, im = self._scatter_fes(ax, feature_traj, bins, nan_threshold)
+            feature_nicknames = self._check_fes_arguments(features, feature_nicknames)
+            fig, ax = init_plot("Free Energy Surface", f"${feature_nicknames[0]}$", f"${feature_nicknames[1]}$",
+                                ax=ax, figsize=fig_size)
+            # get traj of features and trim to chemicals fraction
+            feature_traj = self.get_feature_trajs_from_names(features)[:int(data_fraction * self.num_frames)]
+            ax, im = scatter_fes(self.beta, ax, feature_traj, bins, nan_threshold)
         cbar = plt.colorbar(im, ax=ax)
         cbar.set_label(
-            f"$F({feature_nicknames[0]},{feature_nicknames[1]})$ / kJ mol$^{{-1}}$"
+            f"F({feature_nicknames[0]},{feature_nicknames[1]}) / kJ mol$^{{-1}}$"
         )
         plt.gca().set_aspect("equal")
         if landmark_points:
@@ -218,31 +190,31 @@ class Experiment:
 
         return fig, ax
 
-    def markov_state_model(self, n_clusters: int, lagtime: str, features: list[str],
-                           feature_nicknames: Optional[list[str]] = None,
-                           threshold_probability: float = 1e-2):
-        assert isinstance(lagtime, str), "Lagtime must be a string (e.g. `10ns')."
-        samples = self.get_trajectory()
-        # TODO: make clustering work for sin, cos features
-        msm = MSM(n_clusters, lagtime=lagtime)
-        fig, axs = init_multiplot(nrows=5, ncols=3, panels=['0:2,0:2', '0,2', '1,2', '2:,:-1', '2,2'], title='MSM')
-        msm.fit(data=samples, timestep=self.savefreq)
-        msm.plot_timescales(show=False, ax=axs[1])
-        msm.plot_transition_matrix(show=False, ax=axs[4])
-        msm.plot_transition_graph(threshold_probability=threshold_probability, ax=axs[3])
-        msm.plot_stationary_distribution(show=False, ax=axs[2])
-
-        feature_ids = get_feature_ids_from_names(features, self.featurizer)
-        assert len(feature_ids) == 2
-        landmark_points = {}
-        for i in range(msm.number_of_states):
-            landmark_points[str(i + 1)] = tuple(msm.state_centres[i, feature_ids])
-
-        self.free_energy_plot(features, feature_nicknames,
-                              landmark_points=landmark_points,
-                              ax=axs[0], save_data=False,
-                              show_fig=False, close_fig=False)
-        plt.show()
+    # def markov_state_model(self, n_clusters: int, lagtime: str, features: list[str],
+    #                        feature_nicknames: Optional[list[str]] = None,
+    #                        threshold_probability: float = 1e-2):
+    #     assert isinstance(lagtime, str), "Lagtime must be a string (e.g. `10ns')."
+    #     samples = self.get_trajectory()
+    #     # TODO: make clustering work for sin, cos features
+    #     msm = MSM(n_clusters, lagtime=lagtime)
+    #     fig, axs = init_multiplot(nrows=5, ncols=3, panels=['0:2,0:2', '0,2', '1,2', '2:,:-1', '2,2'], title='MSM')
+    #     msm.fit(data=samples, timestep=self.savefreq)
+    #     msm.plot_timescales(show=False, ax=axs[1])
+    #     msm.plot_transition_matrix(show=False, ax=axs[4])
+    #     msm.plot_transition_graph(threshold_probability=threshold_probability, ax=axs[3])
+    #     msm.plot_stationary_distribution(show=False, ax=axs[2])
+    #
+    #     feature_ids = get_feature_ids_from_names(features, self.featurizer)
+    #     assert len(feature_ids) == 2
+    #     landmark_points = {}
+    #     for i in range(msm.number_of_states):
+    #         landmark_points[str(i + 1)] = tuple(msm.state_centres[i, feature_ids])
+    #
+    #     self.free_energy_plot(features, feature_nicknames,
+    #                           landmark_points=landmark_points,
+    #                           ax=axs[0], save_data=False,
+    #                           show_fig=False, close_fig=False)
+    #     plt.show()
 
     # TODO: add PCCA+ function for "coarse graining" the MSM
     def timeseries_analysis(self, contact_threshold: float = 2.0, times: list[str] = None):
@@ -404,7 +376,7 @@ class Experiment:
         else:
             raise NotImplementedError
 
-    def feature_eigenvalue(self, CV:str, dim: int) -> float:
+    def feature_eigenvalue(self, CV: str, dim: int) -> float:
         if not self.features_provided:
             raise ValueError("Cannot compute a feature eigenvalue for an unfeaturized trajectory.")
         else:
@@ -447,6 +419,7 @@ class Experiment:
             normalised: bool = True,
             print_to_terminal: bool = True,
             subtract_feature_means: bool = False,
+            use_all_features: bool = True,
     ):
         """
         Creates a PLUMED script for metadynamics in the current directory.
@@ -484,8 +457,12 @@ class Experiment:
             output = 'RESTART'
             f.write(output + "\n")
 
-            # Union of all features appearing in the CVs
-            relevant_features = list({f for feat in features for f in feat})
+            if use_all_features:
+                # Use all features in plumed script
+                relevant_features = self.featurizer.describe()
+            else:
+                # Union of all features appearing in the CVs
+                relevant_features = list({f for feat in features for f in feat})
 
             # Save features and coefficients to file
             with open(os.path.join(self.location, 'enhanced_sampling_features_and_coeffs.csv'), 'w') as f2:
@@ -596,33 +573,41 @@ class Experiment:
         topology = pdb.topology
         traj = load_trajectory(location, topology)
         num_frames = len(traj)
-        assert np.abs(num_frames - int(self.duration / self.savefreq)) <= 1, (
-            f"duration ({self.duration}) and savefreq ({self.savefreq}) incompatible with number of conformations "
-            f"found in trajectory (got {num_frames}, expected {int(self.duration / self.savefreq)})."
-        )
-
-        print("Successfully initialised datafiles.")
+        if self.in_progress:
+            print("[Notice] For in-progress experiments, the save frequency cannot be checked. "
+                  "Assuming it is correct in the metadata file.")
+            # Set duration based on the number of frames in the trajectory, not based on the duration in the metadata
+            self.duration = num_frames * self.savefreq
+        else:
+            # Check that the number of frames in the trajectory is consistent with the duration and savefreq
+            assert np.abs(num_frames - int(self.duration / self.savefreq)) <= 1, (
+                f"duration ({self.duration}) and savefreq ({self.savefreq}) incompatible with number of conformations "
+                f"found in trajectory (got {num_frames}, expected {int(self.duration / self.savefreq)}). "
+                f"Consider re-initialising with in_progress=True."
+            )
 
         return pdb, topology, traj, num_frames
 
-    def __init_biasfiles(self, metad_bias_file):
+    def __init_biasfiles(self, reweight=False):
         """
         Reads Metadynamics bias potential and weights from file
         """
-        if metad_bias_file is not None:
-            metad_weights, bias_potential_traj = self._load_metad_bias(metad_bias_file)
-            assert len(metad_weights) == len(self.traj), (
-                f"metadynamics weights (len {len(metad_weights)}) and trajectory (len {len(self.traj)}) must have the"
-                f" same length."
-            )
-            print("Successfully initialised metadynamics bias files.")
-        else:
-            metad_weights, bias_potential_traj = None, None
-            print(
-                "No metadynamics bias files supplied; assuming an unbiased trajectory."
-            )
+        if os.path.exists(os.path.join(self.location, "HILLS")):
+            HILLS_file = os.path.join(self.location, "HILLS")
+            if os.path.exists(os.path.join(self.location, "fes.dat")):
+                fes_file = os.path.join(self.location, "fes.dat")
+            else:
+                print("[Notice] No fes.dat file found in experiment directory. Attempting to generate one from HILLS file.")
+                subprocess.call(f"plumed sum_hills --hills {HILLS_file}", shell=True)
+                fes_file = os.path.join(self.location, 'fes.dat')
 
-        return metad_weights, bias_potential_traj
+            fe_data = np.genfromtxt(fes_file, autostrip=True)
+            feature1_traj, feature2_traj, fe = get_fe_trajs(fe_data, reweight=reweight)
+            bias_trajectory = BiasTrajectory(feature1_traj, feature2_traj, fe)
+            return bias_trajectory
+        else:
+            # Not a biased experiment
+            return None
 
     def __init_features(self, features: Optional[Union[dict, list[str], np.array]], cos_sin: bool = False):
         """
@@ -645,7 +630,7 @@ class Experiment:
             feature_stds = np.std(featurized_traj, axis=0)
             num_features = len(featurizer.describe())
             features_provided = True
-            print(f"Successfully featurized trajectory with {num_features} features.")
+            print(f"Featurized trajectory with {num_features} features.")
         else:
             featurizer, featurized_traj, feature_means, feature_stds, num_features = (
                 None,
@@ -656,7 +641,7 @@ class Experiment:
             )
             features_provided = False
             print(
-                "No features provided; trajectory defined with cartesian coordinates (not recommended)."
+                "[Notice] No features provided; trajectory defined with cartesian coordinates (not recommended)."
             )
 
         return (
@@ -721,42 +706,6 @@ class Experiment:
             feature_nicknames = features
 
         return feature_nicknames
-
-    def _scatter_fes(self, ax, feature_traj: np.array, bins: int, nan_threshold: int):
-        free_energy, xedges, yedges = free_energy_estimate_2D(
-            ax,
-            remove_nans(feature_traj),
-            self.beta,
-            bins=bins,
-        )
-        masked_free_energy = np.ma.array(
-            free_energy, mask=(free_energy > nan_threshold)  # true indicates a masked (invalid) value
-        )
-
-        im = ax.pcolormesh(np.repeat(yedges[..., None], repeats=len(yedges), axis=1),
-                           np.repeat(xedges[None, ...], repeats=len(xedges), axis=0), masked_free_energy)
-
-        return ax, im
-
-    def _contour_fes(self, ax, feature_traj: np.array):
-        xyz = remove_nans(
-            np.hstack([feature_traj, np.array([self.bias_potential_traj]).T])
-        )
-        x = xyz[:, 0]
-        y = xyz[:, 1]
-        bias_potential = xyz[:, 2]
-        free_energy = -bias_potential + np.max(
-            bias_potential
-        )  # free energy is negative bias potential
-        # set level increment every unit of kT
-        num_levels = int(
-            np.floor((np.max(free_energy) - np.min(free_energy)) * self.beta)
-        )
-        levels = [k * 1 / self.beta for k in range(num_levels + 2)]  # todo: why +2?
-        im = ax.tricontourf(x, y, free_energy, levels=levels, cmap="RdBu_r")
-        ax.tricontour(x, y, free_energy, levels=levels, linewidths=0.5, colors="k")
-
-        return ax, im
 
     def _plot_contact_matrices(self, fig, axs, frames: list[int], times: list[str]):
         contact_data = [mdtraj.compute_contacts(self.traj[frame]) for frame in frames]

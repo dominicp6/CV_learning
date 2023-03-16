@@ -8,6 +8,8 @@
 import os
 import contextlib
 import psutil
+import sys
+import traceback
 from typing import Optional, Callable, Union, TextIO
 
 import numpy as np
@@ -23,6 +25,24 @@ def print_file_contents(file: Union[TextIO, str]):
 
     else:
         print(file.read())
+
+
+def exception_traceback():
+    ex_type, ex_value, ex_traceback = sys.exc_info()
+
+    # Extract unformatter stack traces as tuples
+    trace_back = traceback.extract_tb(ex_traceback)
+
+    # Format stacktrace
+    stack_trace = list()
+
+    for trace in trace_back:
+        stack_trace.append(
+            "File : %s , Line : %d, Func.Name : %s, Message : %s" % (trace[0], trace[1], trace[2], trace[3]))
+
+    print("Exception type : %s " % ex_type.__name__)
+    print("Exception message : %s" % ex_value)
+    print("Stack trace : %s" % stack_trace)
 
 
 def count_files(directory: str, suffix: str) -> int:

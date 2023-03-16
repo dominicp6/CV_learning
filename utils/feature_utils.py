@@ -22,7 +22,7 @@ def get_periodic_labels(featurizer: pyemma.coordinates.featurizer) -> list[bool]
     return periodic_labels
 
 
-def get_feature_means(all_features: list[str], all_means: list[float], selected_features: list[str]):
+def get_feature_means(all_features: list[str], all_means: np.array, selected_features: list[str]):
     """
     Returns the means of the selected features.
 

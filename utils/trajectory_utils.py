@@ -105,8 +105,11 @@ def do_remove_water(traj: md.Trajectory) -> md.Trajectory:
 def do_align_protein(traj: md.Trajectory) -> md.Trajectory:
     # Centre and align protein; useful for removing artifacts from PBCs
     print("Aligning protein")
-    prot = traj.top.select("protein")
-    traj.superpose(traj, atom_indices=prot)
+    try:
+        prot = traj.top.select("protein")
+        traj.superpose(traj, atom_indices=prot)
+    except IndexError:
+        print("No protein found in trajectory, skipping alignment.")
 
     return traj
 

@@ -1,6 +1,8 @@
-import argparse
+import os.path
 
-from OpenMMNoPLUMED import MLSimulation, PDBSimulation
+from OpenMMNoPLUMED import MLSimulation
+
+absolute_path = os.path.dirname(__file__)
 
 simulation_params = {
     'forcefield': 'amber14',
@@ -8,7 +10,7 @@ simulation_params = {
     'resume': None,
     'PLUMED': None,
     'gpu': '0',
-    'duration': '10ns',
+    'duration': '0.01ns',
     'savefreq': '5ps',
     'stepsize': '0.5fs',
     'temperature': '298K',
@@ -21,9 +23,9 @@ simulation_params = {
     'minimise': True,
     'watermodel': 'tip3p',
     'seed': None,
-    'directory': '/home/dominic/PycharmProjects/CV_learning/MLIRexp',
+    'directory': os.path.join(absolute_path, 'MLIRexp'),
     'equilibrate':  'NPT',
-    'equilibration_length': '0.05ns',
+    'equilibration_length': '0.001ns',
     'integrator': 'Verlet',
     'num_water': 1000,
     'ionic_strength': '0.15mol',
@@ -31,24 +33,22 @@ simulation_params = {
 }
 
 if __name__ == '__main__':
-
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument('system', type=str, default=None, help='System to simulation '
-    #                                                            '(Options: BCT, DMF, GDP, GTP, NML)')
-    # args = parser.parse_args()
     NUM_WATER = {
-        'BCT': 2543,
+        'BCT': 2543,  # charged
+        'COT': 1112,  # charged (BUGGY PDB/SDF COMBINATION)
         'DMF': 2271,
-        'GDP': 4966,
-        'GTP': 5467,
+        'GDP': 4966,  # phosphorus
+        'GTP': 5467,  # phosphorus
+        'H2P': 2585,  # phosphorus
+        'HPO': 2624,  # phosphorus
         'NML': 2661,
     }
 
     for system in ['DMF', 'NML']:
-        simulation_params['pdb'] = f'/home/dominic/PycharmProjects/CV_learning/chemicals/nw_pdb_ideal/{system}ideal.pdb'
-        simulation_params['sdf'] = f'/home/dominic/PycharmProjects/CV_learning/chemicals/nw_sdf/{system}ideal.sdf'
+        simulation_params['pdb'] = os.path.join(absolute_path, f'chemicals/nw_pdb_ideal/{system}ideal.pdb')
+        simulation_params['sdf'] = os.path.join(absolute_path, f'chemicals/nw_sdf/{system}ideal.sdf')
         simulation_params['ml_residues'] = f'{system}'
         simulation_params['num_water'] = NUM_WATER[system]
-        simulation_params['name'] = f'{system}_10ns_ani2'
+        simulation_params['name'] = f'TEST2{system}_10ns_ani2'
         simulation = MLSimulation().from_args(args=simulation_params)
         simulation.run()

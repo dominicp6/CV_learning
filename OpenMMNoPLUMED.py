@@ -74,15 +74,15 @@ class OpenMMSimulation:
         # Parser and arg check
         self.parser = self._init_parser()
 
-        try:
-            args = self.parser.parse_args()
-            self.args = get_system_args(args)
-        except SystemExit:
-            # No arguments were passed
-            self.args = {}
-        else:
-            # Check that the arguments are valid
-            self._check_args()
+        # try:
+        #     args = self.parser.parse_args()
+        #     self.args = get_system_args(args)
+        # except SystemExit:
+        #     # No arguments were passed
+        self.args = {}
+        # else:
+        #     # Check that the arguments are valid
+        #     self._check_args()
 
     def from_args(self, args: dict):
         """
@@ -239,11 +239,12 @@ class OpenMMSimulation:
                                    top_name='top.pdb',
                                    save_name='trajectory_processed')
         print("[✓] Cleaned and aligned trajectory")
-        report = pd.read_csv(os.path.join(self.output_dir, self.STATE_DATA_FN))
-        make_graphs(report, self.args.stepsize, self.output_dir, name='simulation_stats')
-        print("[✓] Made graphs of simulation chemicals")
-        self._make_summary_statistics(report)
-        print("[✓] Saved summary statistics")
+        if self.args.state_data:
+            report = pd.read_csv(os.path.join(self.output_dir, self.STATE_DATA_FN))
+            make_graphs(report, self.args.stepsize, self.output_dir, name='simulation_stats')
+            print("[✓] Made graphs of simulation chemicals")
+            self._make_summary_statistics(report)
+            print("[✓] Saved summary statistics")
 
     def generate_executable_command(self, args: dict):
         """
@@ -864,7 +865,7 @@ class MOL2Simulation(OpenMMSimulation):
                 "Error: Specifying a cutoff method other than 'NoCutoff' is not currently supported for MOL2 simulations.")
             quit()
 
-
+# TODO: Implement without requirement to specify a PDB file
 class MLSimulation(OpenMMSimulation):
 
     def _init_model(self):
@@ -911,9 +912,9 @@ class MLSimulation(OpenMMSimulation):
             print("Error: Must specify the residues to be modelled with the ML potential.")
             quit()
 
-        # if self.args.sdf is None:
-        #     print("Error: Must specify the sdf file.")
-        #     quit()
+        if self.args.sdf is None:
+            print("Error: Must specify the sdf file.")
+            quit()
 
         if self.args.pdb is None:
             print("Error: Must provide a PDB file.")

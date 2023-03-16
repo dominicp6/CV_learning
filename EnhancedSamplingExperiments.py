@@ -17,7 +17,7 @@ import numpy as np
 
 from Experiment import Experiment
 from OpenMMSimulation import PDBSimulation
-from utils.general_utils import count_files, list_files
+from utils.general_utils import count_files, list_files, exception_traceback
 from utils.feature_utils import get_cv_type_and_dim, get_features_and_coefficients
 
 
@@ -151,6 +151,7 @@ class EnhancedSamplingExperiments:
                         try:
                             simulation.run()
                         except Exception:
+                            exception_traceback()
                             print(f"Error in experiment {exp_name}, terminated early.")
                 tf = time.time()
                 self.exps_ran += 1
