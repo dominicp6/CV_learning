@@ -155,26 +155,7 @@ if __name__ == "__main__":
     # alanine_exp.run_openmm_experiments()
 
     # TICA Enhanced Sampling (NVT) - 100 features
-    # CVs = ['TICA:0', 'TICA:1']
-    # alanine_exp = EnhancedSamplingExperiments(
-    #     output_dir=output_dir,
-    #     unbiased_exp=alanine_system,
-    #     CVs=CVs,
-    #     starting_structures=starting_structures,
-    #     number_of_repeats=1,
-    #     openmm_parameters=openmm_parameters,
-    #     meta_d_parameters=meta_d_parameters,
-    #     features=final_features,
-    #     subtract_feature_means=False,
-    #     cos_sin=True,
-    #     num_cv_features=4,
-    #     lagtime=1,
-    # )
-    # alanine_exp.initialise_hills_and_PLUMED()
-    # alanine_exp.run_openmm_experiments()
-
-    # VAMP Enhanced Sampling (NVT) - 100 features
-    CVs = ['VAMP:0', 'VAMP:1']
+    CVs = ['TICA:0', 'TICA:1']
     alanine_exp = EnhancedSamplingExperiments(
         output_dir=output_dir,
         unbiased_exp=alanine_system,
@@ -191,3 +172,22 @@ if __name__ == "__main__":
     )
     alanine_exp.initialise_hills_and_PLUMED()
     alanine_exp.run_openmm_experiments()
+
+    # VAMP Enhanced Sampling (NVT) - 100 features
+    # CVs = ['VAMP:0', 'VAMP:1']
+    # alanine_exp = EnhancedSamplingExperiments(
+    #     output_dir=output_dir,
+    #     unbiased_exp=alanine_system,
+    #     CVs=CVs,
+    #     starting_structures=starting_structures,
+    #     number_of_repeats=1,
+    #     openmm_parameters=openmm_parameters,
+    #     meta_d_parameters=meta_d_parameters,
+    #     features=final_features,
+    #     subtract_feature_means=False,
+    #     cos_sin=True,
+    #     num_cv_features=4,
+    #     lagtime=1,
+    # )
+    # alanine_exp.initialise_hills_and_PLUMED()
+    # alanine_exp.run_openmm_experiments()

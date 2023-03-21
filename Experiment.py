@@ -35,7 +35,7 @@ from utils.diffusion_utils import my_fit_dm
 # import pydiffmap.diffusion_map as dfm
 from utils.plot_utils import voronoi_plot_2d
 from utils.experiment_utils import write_metadynamics_line, get_metadata_file, load_pdb, load_trajectory, get_fe_trajs, \
-    BiasTrajectory, scatter_fes, contour_fes, get_feature_ids_from_names, initialise_featurizer, \
+    BiasTrajectory, scatter_fes, heatmap_fes, bezier_fes, contour_fes, get_feature_ids_from_names, initialise_featurizer, \
     generate_reweighting_file, execute_reweighting_script, load_reweighted_trajectory
 from utils.general_utils import supress_stdout, assert_kwarg, print_file_contents
 from utils.openmm_utils import parse_quantity, time_to_iteration_conversion
@@ -138,6 +138,7 @@ class Experiment:
             fig_size=(6, 4),
             ax=None,
             reweight: bool = False,
+            plot_type: str = "bezier",    # For reweighted, biased trajectories only "contour", "bezier", "heatmap"
     ):
         if not self.bias_trajectory and reweight:
             raise ValueError("Cannot reweight unbiased experiments, please set reweight=False.")
@@ -160,7 +161,12 @@ class Experiment:
                                           )
                 execute_reweighting_script(self.location, 'trajectory.dcd', 'plumed_reweight.dat', kT=1/self.beta._value)
                 bias_traj = load_reweighted_trajectory(self.location)
-                ax, im = contour_fes(self.beta, ax, bias_traj)
+                if plot_type == "contour":
+                    ax, im = contour_fes(self.beta, ax, bias_traj)
+                elif plot_type == "heatmap":
+                    ax, im = heatmap_fes(self.beta, ax, bias_traj)
+                elif plot_type == "bezier":
+                    ax, im = bezier_fes(self.beta, ax, bias_traj)
             else:
                 fig, ax = init_plot("Free Energy Surface", f"CV 1", f"CV 2", ax=ax, figsize=fig_size)
                 feature_nicknames = ["CV 1", "CV 2"]

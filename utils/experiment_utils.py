@@ -14,6 +14,8 @@ import mdtraj
 import pyemma
 import openmm.unit as unit
 from typing import Union
+import matplotlib.pyplot as plt
+from scipy.interpolate import SmoothBivariateSpline, griddata
 
 import dill
 import numpy as np
@@ -180,7 +182,8 @@ def get_fe_trajs(data, reweight=False):
         delta_idx = 0
     feature1_traj = data[:, 0+delta_idx]
     feature2_traj = data[:, 1+delta_idx]
-    fe = data[:, 2+delta_idx] - np.min(data[:, 2+delta_idx])
+    fe = data[:, 2+delta_idx]
+    fe = fe - np.min(fe)
     return feature1_traj, feature2_traj, fe
 
 
@@ -204,8 +207,7 @@ def contour_fes(beta: unit.Quantity, ax, bias_traj: BiasTrajectory):
     xyz = remove_nans(np.column_stack((bias_traj.feat1, bias_traj.feat2, bias_traj.free_energy)))
     x = xyz[:, 0]
     y = xyz[:, 1]
-    # shift free energy so that the minimum is at 0
-    free_energy = xyz[:, 2] - np.min(xyz[:, 2])
+    free_energy = xyz[:, 2]
     # set level increment every unit of kT
     num_levels = int(
         np.floor((np.max(free_energy) - np.min(free_energy)) * beta)
@@ -215,6 +217,37 @@ def contour_fes(beta: unit.Quantity, ax, bias_traj: BiasTrajectory):
     ax.tricontour(x, y, free_energy, levels=levels, linewidths=0.5, colors="k")
 
     return ax, im
+
+def bezier_fes(beta: unit.Quantity, ax, bias_traj: BiasTrajectory):
+    xyz = remove_nans(np.column_stack((bias_traj.feat1, bias_traj.feat2, bias_traj.free_energy)))
+    x = xyz[:, 0]
+    y = xyz[:, 1]
+    free_energy = xyz[:, 2] 
+    bz = SmoothBivariateSpline(x, y, free_energy, kx=3, ky=3)
+    X,Y = np.meshgrid(np.linspace(x.min(),x.max(),100),np.linspace(y.min(),y.max(),100))
+    surface = bz.ev(X.flatten(), Y.flatten())
+    surface = surface.reshape(X.shape)
+    # large negative values are unphysical
+    surface[surface < -0.1 * np.nanmax(free_energy)] = np.nan
+    # values above 1.1 * max free energy are unphysical
+    surface[surface > 1.1 * np.nanmax(free_energy)] = np.nan
+    im = ax.imshow(surface, extent=[x.min(),x.max(),y.min(),y.max()], origin='lower', cmap='RdBu_r')
+
+    return ax, im   
+
+def heatmap_fes(beta: unit.Quantity, ax, bias_traj: BiasTrajectory):
+    xyz = remove_nans(np.column_stack((bias_traj.feat1, bias_traj.feat2, bias_traj.free_energy)))
+    x = xyz[:, 0]
+    y = xyz[:, 1]
+    free_energy = xyz[:, 2] 
+    X,Y = np.meshgrid(np.linspace(x.min(),x.max(),100),np.linspace(y.min(),y.max(),100))
+    Z = griddata((x,y),free_energy,(X,Y),method='cubic')
+
+    # Plot heatmap of Z
+    im = ax.imshow(Z, extent=[x.min(),x.max(),y.min(),y.max()], origin='lower', cmap='RdBu_r')
+
+    return ax, im
+
 
 def generate_reweighting_file(plumed_file, reweighting_file, feature1='DIH_2_5_7_9', feature2='DIH_9_15_17_19',
                               stride=50, bandwidth=0.05, grid_bin=50, grid_min=-3.141592653589793,
@@ -280,9 +313,9 @@ def execute_reweighting_script(directory: str, trajectory_name: str, plumed_rewe
 def load_reweighted_trajectory(directory: str, colvar_file="COLVAR_REWEIGHT"):
     dat_file = os.path.join(directory, colvar_file)
     data = np.genfromtxt(dat_file, autostrip=True)
-    feature1_traj, feature2_traj, bias = get_fe_trajs(data, reweight=True)
+    feature1_traj, feature2_traj, free_energy = get_fe_trajs(data, reweight=True)
 
-    return BiasTrajectory(feature1_traj, feature2_traj, -bias)
+    return BiasTrajectory(feature1_traj, feature2_traj, free_energy - np.min(free_energy))
 
 def plot_average_fes(directory, xlabel, ylabel, xcorrection , ycorrection):
     for subdirectory_tuple in os.walk(directory):
