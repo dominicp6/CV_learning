@@ -19,6 +19,7 @@ from Experiment import Experiment
 from OpenMMSimulation import PDBSimulation
 from utils.general_utils import count_files, list_files, exception_traceback
 from utils.feature_utils import get_cv_type_and_dim, get_features_and_coefficients
+from utils.experiment_utils import create_plumed_metadynamics_script
 
 
 class EnhancedSamplingExperiments:
@@ -117,20 +118,20 @@ class EnhancedSamplingExperiments:
                 os.mkdir(f"{self.output_dir}/{exp_name}")
                 open(f"{self.output_dir}/{exp_name}/HILLS", "w")
                 open(f"{self.output_dir}/{exp_name}/COLVAR", "w")
-                self.exp.create_plumed_metadynamics_script(CVs=self.CVs,
-                                                           features=features,
-                                                           coefficients=coefficients,
-                                                           filename=f"{self.output_dir}/{exp_name}/plumed.dat",
-                                                           exp_name=exp_name,
-                                                           gaussian_height=self.meta_d_params['gaussian_height'],
-                                                           gaussian_pace=self.meta_d_params['gaussian_pace'],
-                                                           well_tempered=self.meta_d_params['well_tempered'],
-                                                           bias_factor=self.meta_d_params['bias_factor'],
-                                                           temperature=self.meta_d_params['temperature'],
-                                                           sigma_list=self.meta_d_params['sigma_list'],
-                                                           normalised=self.meta_d_params['normalised'],
-                                                           subtract_feature_means=self.subtract_feature_means,
-                                                           print_to_terminal=False)
+                create_plumed_metadynamics_script(exp=self.exp,
+                                                CVs=self.CVs,
+                                                features=features,
+                                                coefficients=coefficients,
+                                                filename=f"{self.output_dir}/{exp_name}/plumed.dat",
+                                                gaussian_height=self.meta_d_params['gaussian_height'],
+                                                gaussian_pace=self.meta_d_params['gaussian_pace'],
+                                                well_tempered=self.meta_d_params['well_tempered'],
+                                                bias_factor=self.meta_d_params['bias_factor'],
+                                                temperature=self.meta_d_params['temperature'],
+                                                sigma_list=self.meta_d_params['sigma_list'],
+                                                normalised=self.meta_d_params['normalised'],
+                                                subtract_feature_means=self.subtract_feature_means,
+                                                print_to_terminal=False)
         self.initialised = True
 
     def run_openmm_experiments(self):

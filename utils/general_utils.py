@@ -98,6 +98,9 @@ def supress_stdout(func):
 
 
 def select_file_option(options: list, file_type: str) -> int:
+    """
+    Selects a file from a list of options.
+    """
     if len(options) > 1:
         print(f"{len(options)} {file_type} files found in the given directory:")
         for idx, file in enumerate(options):
@@ -178,7 +181,7 @@ def linear_interp_coordinate_data(x_data: npt.NDArray[np.float64], y_data: npt.N
         return float(y_data[-1] + (x_to_evaluate - x_max) * (y_data[-1] - y_data[-2]) / (x_data[-1] - x_data[-2]))
 
 
-def gaussian_smooth(x: np.array, y: np.array, dx: float, sigma: float) -> (np.array, np.array):
+def gaussian_smooth(x: np.array, y: np.array, dx: float, sigma: float) -> tuple(np.array, np.array):
     interp = interpolate.interp1d(x, y, fill_value='extrapolate')
     interpolated_x = np.arange(min(x), max(x)+dx/2, dx)
     sigma_gaussian = sigma / dx

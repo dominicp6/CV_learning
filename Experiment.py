@@ -8,15 +8,11 @@
    Author: Dominic Phillips (dominicp6)
 """
 import os
-import json
 import copy
 import re
-import csv
-import subprocess
 from time import time
 from typing import Union, Optional
 
-import mdtraj
 import deeptime
 import numpy as np
 import matplotlib.pyplot as plt
@@ -30,17 +26,16 @@ from scipy.spatial import Voronoi
 
 # from KramersRateEvaluator import KramersRateEvaluator
 # from MarkovStateModel import MSM
-from Dihedrals import Dihedrals
 from utils.diffusion_utils import my_fit_dm
-# import pydiffmap.diffusion_map as dfm
+import pydiffmap.diffusion_map as dfm
 from utils.plot_utils import voronoi_plot_2d
-from utils.experiment_utils import write_metadynamics_line, get_metadata_file, load_pdb, load_trajectory, get_fe_trajs, \
-    BiasTrajectory, scatter_fes, heatmap_fes, bezier_fes, contour_fes, get_feature_ids_from_names, initialise_featurizer, \
-    generate_reweighting_file, execute_reweighting_script, load_reweighted_trajectory
-from utils.general_utils import supress_stdout, assert_kwarg, print_file_contents
-from utils.openmm_utils import parse_quantity, time_to_iteration_conversion
+from utils.experiment_utils import BiasTrajectory, scatter_fes, get_feature_ids_from_names, \
+    reweight_biased_fes, generate_fes, set_fes_cbar_and_axis, check_fes_arguments, init_metadata, init_datafiles, \
+    init_biasfiles, init_features
+from utils.general_utils import supress_stdout, assert_kwarg
+from utils.openmm_utils import time_to_iteration_conversion
 from utils.plotting_functions import init_plot, init_multiplot, save_fig
-from utils.feature_utils import compute_best_fit_feature_eigenvector, get_cv_type_and_dim, get_feature_means
+from utils.feature_utils import compute_best_fit_feature_eigenvector
 
 
 # TODO: fix free energy plot to make it work correctly with collective variables
@@ -94,14 +89,14 @@ class Experiment:
             self.stepsize,
             self.iterations,
             self.beta,
-        ) = self._init_metadata(location)
+        ) = init_metadata(location)
         (
             self.pdb,
             self.topology,
             self.traj,
             self.num_frames,
-        ) = self._init_datafiles(location)
-        self.bias_trajectory = self.__init_biasfiles()
+        ) = init_datafiles(self, location)
+        self.bias_trajectory = init_biasfiles(location)
         (
             self.feature_dict,
             self.featurizer,
@@ -110,7 +105,7 @@ class Experiment:
             self.feature_stds,
             self.num_features,
             self.features_provided,
-        ) = self.__init_features(features, cos_sin=cos_sin)
+        ) = init_features(self, features, cos_sin=cos_sin)
 
         self.CV_types = ['PCA', 'TICA', 'VAMP', 'DMD', 'DM']
         self.CVs = {"PCA": None, "TICA": None, "VAMP": None, "DMD": None, "DM": None}
@@ -140,58 +135,27 @@ class Experiment:
             reweight: bool = False,
             plot_type: str = "bezier",    # For reweighted, biased trajectories only "contour", "bezier", "heatmap"
     ):
-        if not self.bias_trajectory and reweight:
-            raise ValueError("Cannot reweight unbiased experiments, please set reweight=False.")
 
-        if self.bias_trajectory:
-            if data_fraction != 1.0:
-                raise NotImplementedError("Trimming data not implemented for biased experiments, "
-                                          "please set data_fraction=1.0.")
-            if reweight:
-                assert features is not None, "Must provide features for reweighting"
-                # TODO: replace by a check looking into the plumed.dat file
-                feature_nicknames = features
-                fig, ax = init_plot("Free Energy Surface", f"{feature_nicknames[0]}", f"{feature_nicknames[1]}",
-                                    ax=ax, figsize=fig_size)
-                generate_reweighting_file(os.path.join(self.location, 'plumed.dat'),
-                                          os.path.join(self.location, 'plumed_reweight.dat'),
-                                          feature1=feature_nicknames[0], feature2=feature_nicknames[1],
-                                          stride=50, bandwidth=0.05, grid_bin=50, grid_min=-3.141592653589793,
-                                          grid_max=3.141592653589793,
-                                          )
-                execute_reweighting_script(self.location, 'trajectory.dcd', 'plumed_reweight.dat', kT=1/self.beta._value)
-                bias_traj = load_reweighted_trajectory(self.location)
-                if plot_type == "contour":
-                    ax, im = contour_fes(self.beta, ax, bias_traj)
-                elif plot_type == "heatmap":
-                    ax, im = heatmap_fes(self.beta, ax, bias_traj)
-                elif plot_type == "bezier":
-                    ax, im = bezier_fes(self.beta, ax, bias_traj)
-            else:
-                fig, ax = init_plot("Free Energy Surface", f"CV 1", f"CV 2", ax=ax, figsize=fig_size)
-                feature_nicknames = ["CV 1", "CV 2"]
-                # biased experiments require contour plots
-                ax, im = contour_fes(self.beta, ax, self.bias_trajectory)
-        else:
-            assert features is not None, "Must provide features for unbiased experiments"
-            # unbiased experiments require scatter plots
-            feature_nicknames = self._check_fes_arguments(features, feature_nicknames)
-            fig, ax = init_plot("Free Energy Surface", f"${feature_nicknames[0]}$", f"${feature_nicknames[1]}$",
-                                ax=ax, figsize=fig_size)
-            # get traj of features and trim to chemicals fraction
+        feature_nicknames = check_fes_arguments(self, data_fraction, reweight, features, feature_nicknames)
+        fig, ax = init_plot("Free Energy Surface", f"{feature_nicknames[0]}", f"{feature_nicknames[1]}", ax=ax, figsize=fig_size)
+
+        if self.bias_trajectory and reweight:
+                ax, im = reweight_biased_fes(self.location, feature_nicknames, ax, self.beta, plot_type)
+        elif self.bias_trajectory and not reweight:
+                ax, im = generate_fes(self.beta, ax, self.bias_trajectory, plot_type=plot_type)
+        elif not self.bias_trajectory:
             feature_traj = self.get_feature_trajs_from_names(features)[:int(data_fraction * self.num_frames)]
             ax, im = scatter_fes(self.beta, ax, feature_traj, bins, nan_threshold)
-        cbar = plt.colorbar(im, ax=ax)
-        cbar.set_label(
-            f"F({feature_nicknames[0]},{feature_nicknames[1]}) / kJ mol$^{{-1}}$"
-        )
-        plt.gca().set_aspect("equal")
+        
+        cbar = set_fes_cbar_and_axis(ax, im, feature_nicknames)
+
         if landmark_points:
             for point, coordinates in landmark_points.items():
                 ax.plot(coordinates[0], coordinates[1], marker='o', markerfacecolor='w')
                 ax.annotate(point, coordinates, color='w')
             vor = Voronoi(np.array(list(landmark_points.values())))
             fig = voronoi_plot_2d(vor, ax=ax, line_colors='red', line_width=2)
+        
         save_fig(fig, save_dir=os.getcwd(), name=save_name, save_data=save_data, show_fig=show_fig, close=close_fig)
 
         return fig, ax
@@ -409,112 +373,6 @@ class Experiment:
 
         return coeffs[1:]
 
-    def create_plumed_metadynamics_script(
-            self,
-            CVs: list[str],
-            features: list[list[str]],
-            coefficients: list[list[float]],
-            filename: str = 'plumed.dat',
-            exp_name: str = 'exp',
-            gaussian_height: float = 0.2,
-            gaussian_pace: int = 1000,
-            well_tempered: bool = True,
-            bias_factor: float = 8,
-            temperature: float = 300,
-            sigma_list: Optional[list[float]] = None,
-            normalised: bool = True,
-            print_to_terminal: bool = True,
-            subtract_feature_means: bool = False,
-            use_all_features: bool = True,
-    ):
-        """
-        Creates a PLUMED script for metadynamics in the current directory.
-
-        :param CVs: List of CVs to use for metadynamics.
-        CV format is CV:dim (dim optional), examples: TICA:0, DM:3, PHI 0 ALA 2, PSI 0 ALA 2.
-        :param filename: Name of the PLUMED script. If None, defaults to 'plumed.dat'.
-        :param exp_name: Name of the experiment. If None, defaults to 'exp'.
-        :param gaussian_height: Height of the Gaussian bias.
-        :param gaussian_pace: Number of steps between depositing each Gaussian bias.
-        :param well_tempered: Whether to use well-tempered metadynamics.
-        :param bias_factor: Bias factor for well-tempered metadynamics.
-        :param temperature: Temperature for well-tempered metadynamics.
-        :param sigma_list: List of sigmas for each CV. If None, defaults to 0.1 for each CV.
-        :param normalised:  Whether to use normalised CVs.
-        :param print_to_terminal: Whether to print the script to the terminal.
-        :param subtract_feature_means: Whether to subtract the mean of each feature when defining it in the PLUMED script.
-        """
-        if sigma_list is None:
-            sigma_list = [0.1]*len(CVs)
-        assert len(sigma_list) == len(CVs), f"Number of sigmas ({len(sigma_list)}) " \
-                                            f"must match number of CVs ({len(CVs)})."
-        if not self.features_provided:
-            raise ValueError(
-                "Cannot create PLUMED metadynamics script for an unfeaturized trajectory. "
-                "Try reinitializing Experiment object with features defined."
-            )
-        else:
-            # Check if CVs are valid
-            self._check_valid_cvs(CVs)
-
-            # Initialise PLUMED script
-            file_name = "./plumed.dat" if filename is None else f"{filename}"
-            f = open(file_name, "w")
-            output = 'RESTART'
-            f.write(output + "\n")
-
-            if use_all_features:
-                # Use all features in plumed script
-                relevant_features = self.featurizer.describe()
-            else:
-                # Union of all features appearing in the CVs
-                relevant_features = list({f for feat in features for f in feat})
-
-            # Save features and coefficients to file
-            with open(os.path.join(self.location, 'enhanced_sampling_features_and_coeffs.csv'), 'w') as f2:
-                writer = csv.writer(f2, delimiter='\t')
-                writer.writerows(zip(features, coefficients))
-
-            if subtract_feature_means:
-                offsets = get_feature_means(all_features=self.featurizer.describe(),
-                                            all_means=self.feature_means,
-                                            selected_features=relevant_features)
-            else:
-                offsets = None
-
-            # Initialise Dihedrals class (for now only linear combinations of dihedral CVs are supported)
-            dihedral_features = Dihedrals(
-                topology=self.topology,
-                dihedrals=relevant_features,
-                offsets=offsets,
-                normalised=normalised,
-            )
-
-            # Write PLUMED script
-            dihedral_features.write_torsion_labels(file=f)
-            dihedral_features.write_transform_labels(file=f)
-
-            # Write CVs to PLUMED script
-            for idx, CV in enumerate(CVs):
-                traditional_cv, cv_type, cv_dim = get_cv_type_and_dim(CV)
-
-                # Only write combined label for traditional CVs
-                if traditional_cv:
-                    dihedral_features.write_combined_label(CV_name=CV,
-                                                           features=features[idx],
-                                                           coefficients=coefficients[idx],
-                                                           periodic=False,
-                                                           file=f)
-
-            # Write metadynamics command to PLUMED script
-            write_metadynamics_line(
-                well_tempered=well_tempered, bias_factor=bias_factor, temperature=temperature, height=gaussian_height,
-                pace=gaussian_pace, sigma_list=sigma_list, CVs=CVs, exp_name=exp_name, file=f, top=self.topology,
-            )
-
-            if print_to_terminal:
-                print_file_contents(file_name)
-
     def get_feature_trajs_from_names(
             self,
             feature_names: list[str],
@@ -542,226 +400,3 @@ class Experiment:
                 feature_trajs.append(self.featurized_traj[:, feature_id])
 
         return np.array(feature_trajs)
-
-    # ====================== INIT HELPERS =================================
-    @staticmethod
-    def _init_metadata(location: str, keyword="metadata"):
-        """
-        Reads experiment metadata from file
-        """
-        metadata_file = get_metadata_file(location, keyword)
-        with open(os.path.join(metadata_file)) as metadata_f:
-            metadata = json.load(metadata_f)
-        values = {}
-        for key in ["temperature", "duration", "savefreq", "stepsize"]:
-            try:
-                values[key] = metadata[key]
-            except Exception:
-                raise ValueError(f"Key {key} not found in the metadata file.")
-
-        temperature, duration, savefreq, stepsize = (
-            parse_quantity(values["temperature"]),
-            parse_quantity(values["duration"]),
-            parse_quantity(values["savefreq"]),
-            parse_quantity(values["stepsize"]),
-        )
-        iterations = int(duration / stepsize)
-        beta = 1 / (temperature * 0.0083144621)
-        print("Successfully initialised metadata.")
-
-        return temperature, duration, savefreq, stepsize, iterations, beta
-
-    def _init_datafiles(self, location: str):
-        """
-        Reads molecular system and trajectory chemicals from file
-        """
-        pdb = load_pdb(location)
-        topology = pdb.topology
-        traj = load_trajectory(location, topology)
-        num_frames = len(traj)
-        if self.in_progress:
-            print("[Notice] For in-progress experiments, the save frequency cannot be checked. "
-                  "Assuming it is correct in the metadata file.")
-            # Set duration based on the number of frames in the trajectory, not based on the duration in the metadata
-            self.duration = num_frames * self.savefreq
-        else:
-            # Check that the number of frames in the trajectory is consistent with the duration and savefreq
-            assert np.abs(num_frames - int(self.duration / self.savefreq)) <= 1, (
-                f"duration ({self.duration}) and savefreq ({self.savefreq}) incompatible with number of conformations "
-                f"found in trajectory (got {num_frames}, expected {int(self.duration / self.savefreq)}). "
-                f"Consider re-initialising with in_progress=True."
-            )
-
-        return pdb, topology, traj, num_frames
-
-    def __init_biasfiles(self, reweight=False):
-        """
-        Reads Metadynamics bias potential and weights from file
-        """
-        if os.path.exists(os.path.join(self.location, "HILLS")):
-            HILLS_file = os.path.join(self.location, "HILLS")
-            if os.path.exists(os.path.join(self.location, "fes.dat")):
-                fes_file = os.path.join(self.location, "fes.dat")
-            else:
-                print("[Notice] No fes.dat file found in experiment directory. Attempting to generate one from HILLS file.")
-                subprocess.call(f"plumed sum_hills --hills {HILLS_file}", shell=True)
-                fes_file = os.path.join(self.location, 'fes.dat')
-
-            fe_data = np.genfromtxt(fes_file, autostrip=True)
-            feature1_traj, feature2_traj, fe = get_fe_trajs(fe_data, reweight=reweight)
-            bias_trajectory = BiasTrajectory(feature1_traj, feature2_traj, fe)
-            return bias_trajectory
-        else:
-            # Not a biased experiment
-            return None
-
-    def __init_features(self, features: Optional[Union[dict, list[str], np.array]], cos_sin: bool = False):
-        """
-        Featurises the trajectory according to specified features.
-        Features can be an explicit dictionary of dihedrals, such as {'\phi' : [4, 6, 8 ,14], '\psi' : [6, 8, 14, 16]}.
-        Alternatively, you can specify the automatic inclusion of all features of particular classes as follows e.g.
-        features = ['dihedrals']                  # adds dihedrals
-        features = ['dihedrals', 'carbon_alpha']  # adds dihedrals and distances between all Ca atoms
-
-        Options for features are:
-        - dihedrals
-        - carbon_alpha
-        - sidechain_torsions
-        """
-        # TODO: check feature names are preserved correctly when adding through dictionary
-        if features is not None:
-            featurizer = initialise_featurizer(features, self.topology, cos_sin=cos_sin)
-            featurized_traj = featurizer.transform(self.traj)
-            feature_means = np.mean(featurized_traj, axis=0)
-            feature_stds = np.std(featurized_traj, axis=0)
-            num_features = len(featurizer.describe())
-            features_provided = True
-            print(f"Featurized trajectory with {num_features} features.")
-        else:
-            featurizer, featurized_traj, feature_means, feature_stds, num_features = (
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            features_provided = False
-            print(
-                "[Notice] No features provided; trajectory defined with cartesian coordinates (not recommended)."
-            )
-
-        return (
-            features,
-            featurizer,
-            featurized_traj,
-            feature_means,
-            feature_stds,
-            num_features,
-            features_provided,
-        )
-
-    def _load_metad_bias(self, bias_file: str, col_idx: int = 2) -> (list, list):
-        colvar = np.genfromtxt(bias_file, delimiter=" ")
-        assert (
-                col_idx < colvar.shape[1]
-        ), "col_idx must not exceed 1 less than the number of columns in the bias file"
-        bias_potential_traj = colvar[:, col_idx]  # [::500][:-1]
-        weights = np.exp(self.beta * bias_potential_traj)
-        return weights, bias_potential_traj
-
-    # ====================== OTHER HELPERS =================================
-    def _check_feature_is_cv_feature(self, feature: str):
-        regex = r"^(" + "|".join(self.CV_types) + r")\d+$"
-        return re.match(regex, feature)
-
-    def _check_valid_cvs(self, CVs: list[str]):
-        """
-        Checks that the CVs provided are valid.
-        """
-        for idx, CV in enumerate(CVs):
-            _, cv_type, cv_dim = get_cv_type_and_dim(CV)
-            # If the CV is neither an atom feature nor a traditional CV (e.g. TICA, PCA, etc.), raise an error
-            if cv_type not in self.CVs.keys() and cv_type not in self.featurizer.describe():
-                raise ValueError(f"CV '{cv_type}' not in {self.CVs.keys()} or {self.featurizer.describe()}")
-
-            if cv_type in self.CVs.keys() and self.CVs[cv_type] is None:
-                raise ValueError(f"{cv_type} CVs not computed.")
-
-    def _check_fes_arguments(
-            self,
-            features: list[str],
-            feature_nicknames: Optional[list[str]],
-    ) -> (list[str], str):
-        # Check that the experiment is featurized
-        if not self.features_provided:
-            raise ValueError(
-                "Cannot construct ramachandran plot for an unfeaturized trajectory. "
-                "Try reinitializing Experiment object with features defined."
-            )
-
-        # Check that the required features exist
-        for feature in features:
-            assert (
-                    (feature in self.featurizer.describe())
-                    or self._check_feature_is_cv_feature(feature)), \
-                f"Feature '{feature}' not found in available features ({self.featurizer.describe()}) " \
-                f"or CV types ({self.CV_types})."
-
-        # Automatically set feature nicknames if they are not provided
-        if not feature_nicknames:
-            feature_nicknames = features
-
-        return feature_nicknames
-
-    def _plot_contact_matrices(self, fig, axs, frames: list[int], times: list[str]):
-        contact_data = [mdtraj.compute_contacts(self.traj[frame]) for frame in frames]
-        min_dist = 0
-        max_dist = np.max(np.hstack((contact_data[0][0], contact_data[1][0], contact_data[2][0])))
-        cbar_x_axis_pos = [0.275, 0.602, 0.9275]
-        for idx, cbar_pos in enumerate(cbar_x_axis_pos):
-            im = axs[idx].imshow(mdtraj.geometry.squareform(contact_data[idx][0], contact_data[idx][1])[0],
-                                 vmin=min_dist, vmax=max_dist)
-            axs[idx].set_title(f'time = {times[idx]}')
-            axs[idx].set_xlabel('Res Number')
-            axs[idx].set_ylabel('Res Number')
-            cbar_ax = fig.add_axes([cbar_pos, 0.855, 0.02, 0.125])
-            fig.colorbar(im, cax=cbar_ax)
-
-    def _plot_trajectory_timeseries(self, axs, contact_threshold: float, times: list[str], duration_ns: float):
-        distances, pairs = mdtraj.compute_contacts(self.traj)
-        number_of_close_contacts = np.sum((distances < contact_threshold), axis=1)  # sum along the columns (contacts)
-        rms_dist = np.sqrt(np.mean(distances ** 2, axis=1))
-        rmsd_initial_structure = mdtraj.rmsd(target=self.traj, reference=self.traj, frame=0)
-        acylindricity = mdtraj.acylindricity(self.traj)
-        radius_of_gyration = mdtraj.compute_rg(self.traj)
-
-        # number of contacts
-        x_var = np.arange(0, duration_ns, duration_ns / self.num_frames)
-        axs[3].plot(x_var, number_of_close_contacts, linewidth=0.5)
-        [axs[3].axvline(x=parse_quantity(t)._value, color='r') for t in times]
-        axs[3].set_xlabel('time (ns)')
-        axs[3].set_ylabel(f'#contacts < {contact_threshold} $nm$')
-
-        # RMSD of contacts
-        axs[4].plot(x_var, rms_dist, linewidth=0.5)
-        [axs[4].axvline(x=parse_quantity(t)._value, color='r') for t in times]
-        axs[4].set_xlabel('time (ns)')
-        axs[4].set_ylabel(f'RMSD Res-Res ($nm$)')
-
-        # RMSD relative to initial structure
-        axs[5].plot(x_var, rmsd_initial_structure, linewidth=0.5)
-        [axs[5].axvline(x=parse_quantity(t)._value, color='r') for t in times]
-        axs[5].set_xlabel('time (ns)')
-        axs[5].set_ylabel(f'RMSD Initial Structure ($nm$)')
-
-        # acylindricity
-        axs[6].plot(x_var, acylindricity, linewidth=0.5)
-        [axs[6].axvline(x=parse_quantity(t)._value, color='r') for t in times]
-        axs[6].set_xlabel('time (ns)')
-        axs[6].set_ylabel(f'Acylindricity')
-
-        # radius of gyration
-        axs[7].plot(x_var, radius_of_gyration, linewidth=0.5)
-        [axs[7].axvline(x=parse_quantity(t)._value, color='r') for t in times]
-        axs[7].set_xlabel('time (ns)')
-        axs[7].set_ylabel(f'Radius of gyration ($nm$)')
