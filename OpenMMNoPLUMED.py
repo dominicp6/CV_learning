@@ -22,6 +22,7 @@ from utils.trajectory_utils import clean_and_align_trajectory
 from utils.openmm_utils import parse_quantity, get_system_args, cutoff_method, add_barostat, \
     get_integrator, SystemObjs, SimulationProps, stringify_named_tuple, check_fields_unchanged, \
     update_numerical_fields, make_graphs
+from utils.general_utils import printlog
 from EquilibrationProtocol import EquilibrationProtocol
 
 
@@ -39,9 +40,9 @@ class Dict2Class(object):
 class OpenMMSimulation:
 
     def __init__(self):
-        self.CHECKPOINT_FN, self.TRAJECTORY_FN, self.STATE_DATA_FN, self.METADATA_FN = \
-            "checkpoint.chk", "trajectory.dcd", "state_data.csv", "metadata.json"
-        self.required_files = {self.CHECKPOINT_FN, self.TRAJECTORY_FN, self.STATE_DATA_FN, self.METADATA_FN}
+        self.CHECKPOINT_FL, self.TRAJECTORY_FL, self.STATE_DATA_FL, self.METADATA_FL, self.LOG_FL = \
+            "checkpoint.chk", "trajectory.dcd", "state_data.csv", "metadata.json", "output.log"
+        self.required_files = {self.CHECKPOINT_FL, self.TRAJECTORY_FL, self.STATE_DATA_FL, self.METADATA_FL, self.LOG_FL}
         self.valid_force_fields = ["amber14", "charmm36"]
         self.valid_precisions = ["single", "mixed", "double"]
         self.valid_water_models = ["tip3p", "tip3pfb", "spce", "tip4pew", "tip4pfb", "tip5p"]
@@ -118,17 +119,17 @@ class OpenMMSimulation:
         any solvent (optional), save a PDB of the entire system model, and create the system object.
         """
         self._init_output_dir()
-        print("[✓] Created output directory")
+        printlog("[✓] Created output directory", os.path.join(self.args.directory, self.LOG_FL))
         model = self._init_model()
         model = self._set_periodicity(model)
-        print("[✓] Initialised model file(s)")
+        printlog("[✓] Initialised model file(s)", os.path.join(self.args.directory, self.LOG_FL))
         self._init_forcefield(model)
-        print("[✓] Initialised force field")
+        printlog("[✓] Initialised force field", os.path.join(self.args.directory, self.LOG_FL))
         modeller = self._init_modeller(model)
-        print("[✓] Initialised modeller")
+        printlog("[✓] Initialised modeller", os.path.join(self.args.directory, self.LOG_FL))
         self._write_updated_model(model, modeller)
         system = self._init_system(modeller)
-        print("[✓] Created system")
+        printlog("[✓] Created system", os.path.join(self.args.directory, self.LOG_FL))
         self.system = SystemObjs(model, modeller, system)
 
         return self.system
@@ -158,7 +159,7 @@ class OpenMMSimulation:
         else:
             # Check if the loaded topology file already has water
             if np.any([atom.residue.name == 'HOH' for atom in model.topology.atoms()]):
-                print("Water found in PBD file: Not changing solvation properties; solvent padding ignored!")
+                printlog("Water found in PBD file: Not changing solvation properties; solvent padding ignored!", os.path.join(self.args.directory, self.LOG_FL))
                 pass
             else:
                 # If no water initially present but the user has specified a water model...
@@ -189,16 +190,16 @@ class OpenMMSimulation:
         minimise the system energy, set particle velocities, save all simulation metadata, and set up the reporters.
         """
         self._init_simulation()
-        print("[✓] Initialised simulation")
+        printlog("[✓] Initialised simulation", os.path.join(self.args.directory, self.LOG_FL))
         self._minimise_system_energy()
         self.simulation.simulation.context.setVelocitiesToTemperature(
             self.args.temperature
         )
-        print("[✓] Finished minimisation")
+        printlog("[✓] Finished minimisation", os.path.join(self.args.directory, self.LOG_FL))
         self._save_simulation_metadata()
-        print("[✓] Saved simulation metadata")
+        printlog("[✓] Saved simulation metadata", os.path.join(self.args.directory, self.LOG_FL))
         self._setup_reporters()
-        print("[✓] Setup reporters")
+        printlog("[✓] Setup reporters", os.path.join(self.args.directory, self.LOG_FL))
 
     def run_equilibration(self):
         """
@@ -209,7 +210,7 @@ class OpenMMSimulation:
                                        modeller=self.system.modeller,
                                        args=self.args,
                                        fixed_density=True,
-                                       output_dir=self.output_dir)
+                                       output_dir=self.args.directory)
         eq_obj.run()
 
     def run_simulation(self):
@@ -217,15 +218,15 @@ class OpenMMSimulation:
         Run the simulation.
         STEPS: Run the simulation for the specified duration, and save the final checkpoint.
         """
-        print(f"Running {self.args.duration} production...")
+        printlog(f"Running {self.args.duration} production...", os.path.join(self.args.directory, self.LOG_FL))
         if self.args.equilibrate:
             # If equilibration was run, resume from the checkpoint file
-            self.simulation.simulation.loadCheckpoint(os.path.join(self.output_dir, f"equilibration_final.chk"))
-            print("[✓] Loaded checkpoint file")
+            self.simulation.simulation.loadCheckpoint(os.path.join(self.args.directory, f"equilibration_final.chk"))
+            printlog("[✓] Loaded checkpoint file", os.path.join(self.args.directory, self.LOG_FL))
         self.simulation.simulation.step(self.args.total_steps)
-        print("[✓] Finished production")
+        printlog("[✓] Finished production", os.path.join(self.args.directorytory, self.LOG_FL))
         self._save_final_checkpoint_and_endstate()
-        print("[✓] Saved final checkpoint")
+        printlog("[✓] Saved final checkpoint", os.path.join(self.args.directory, self.LOG_FL))
 
     def post_process_simulation(self):
         """
@@ -234,17 +235,17 @@ class OpenMMSimulation:
         state chemicals and create plots of energy, temperature etc. Finally, analyse basic statistics of the state
         chemicals and save these to a JSON file.
         """
-        clean_and_align_trajectory(working_dir=self.output_dir,
+        clean_and_align_trajectory(working_dir=self.args.directory,
                                    traj_name='trajectory.dcd',
                                    top_name='top.pdb',
                                    save_name='trajectory_processed')
-        print("[✓] Cleaned and aligned trajectory")
+        printlog("[✓] Cleaned and aligned trajectory", os.path.join(self.args.directory, self.LOG_FL))
         if self.args.state_data:
-            report = pd.read_csv(os.path.join(self.output_dir, self.STATE_DATA_FN))
-            make_graphs(report, self.args.stepsize, self.output_dir, name='simulation_stats')
-            print("[✓] Made graphs of simulation chemicals")
+            report = pd.read_csv(os.path.join(self.args.directory, self.STATE_DATA_FL))
+            make_graphs(report, self.args.stepsize, self.args.directory, name='simulation_stats')
+            printlog("[✓] Made graphs of simulation chemicals", os.path.join(self.args.directory, self.LOG_FL))
             self._make_summary_statistics(report)
-            print("[✓] Saved summary statistics")
+            printlog("[✓] Saved summary statistics", os.path.join(self.args.directory, self.LOG_FL))
 
     def generate_executable_command(self, args: dict):
         """
@@ -320,19 +321,22 @@ class OpenMMSimulation:
             try:
                 # Make output directory
                 os.makedirs(output_dir)
+                file = os.path.join(output_dir, self.LOG_FL)
+                open(file, 'a').close()
             except FileExistsError:
                 files_in_dir = set(os.listdir(output_dir))
                 simulation_files = self.required_files.intersection(files_in_dir)
                 if len(simulation_files) > 0:
-                    print(f"Output directory {output_dir} already exists and has simulation files:")
+                    printlog(f"Output directory {output_dir} already exists and has simulation files:", os.path.join(self.args.directory, self.LOG_FL))
                     [print(file) for file in simulation_files]
-                    print("Please choose a different output directory or delete the existing files.")
+                    printlog("Please choose a different output directory or delete the existing files.", os.path.join(self.args.directory, self.LOG_FL))
                     sys.exit(1)
                 else:
                     pass
 
-        self.output_dir = output_dir
-        return self.output_dir
+        print(output_dir, self.args.directory)
+        self.args = self.args._replace(directory=output_dir)
+        return self.args.directory
 
     def _set_periodicity(self, model: Union[app.PDBFile, Dict2Class]) -> Union[app.PDBFile, Dict2Class]:
         if self.args.periodic is False:
@@ -372,12 +376,12 @@ class OpenMMSimulation:
         integrator = get_integrator(integrator_type=self.args.integrator, args=self.args)
 
         if self.args.gpu != "":
-            print("[✓] Using GPU")
+            printlog("[✓] Using GPU", os.path.join(self.args.directory, self.LOG_FL))
             platform = openmm.Platform.getPlatformByName("CUDA")
             properties["CudaDeviceIndex"] = self.args.gpu
             properties["Precision"] = self.args.precision
         else:
-            print("[✓] Using CPU")
+            printlog("[✓] Using CPU", os.path.join(self.args.directory, self.LOG_FL))
             platform = openmm.Platform.getPlatformByName("CPU")
 
         # Create simulation object using the specified integrator
@@ -390,16 +394,16 @@ class OpenMMSimulation:
         )
 
         if self.args.gpu.count(",") > 0:
-            print(f"[✓] Multiple GPUs ({self.args.gpu})")
+            printlog(f"[✓] Multiple GPUs ({self.args.gpu})", os.path.join(self.args.directory, self.LOG_FL))
 
         # Set initial particle positions
         simulation.context.setPositions(self.system.modeller.positions)
 
         # If resuming, load the checkpoint file
         if self.args.resume:
-            with open(os.path.join(self.output_dir, self.CHECKPOINT_FN), "rb") as f:
+            with open(os.path.join(self.args.directory, self.CHECKPOINT_FL), "rb") as f:
                 simulation.context.loadCheckpoint(f.read())
-                print("[✓] Loaded checkpoint for resuming simulation")
+                printlog("[✓] Loaded checkpoint for resuming simulation", os.path.join(self.args.directory, self.LOG_FL))
 
         self.simulation = SimulationProps(integrator, simulation, properties)
         return self.simulation
@@ -430,7 +434,7 @@ class OpenMMSimulation:
             self.args.total_steps = int(self.args.duration / self.args.stepsize)
 
         # Save metadata
-        with open(os.path.join(self.output_dir, self.METADATA_FN), "w") as json_file:
+        with open(os.path.join(self.args.directory, self.METADATA_FL), "w") as json_file:
             json.dump(system_args_dict, json_file)
 
     def _update_metadata_file(self, metadata_update: dict) -> dict:
@@ -440,8 +444,8 @@ class OpenMMSimulation:
         :return: The updated metadata.
         """
         assert os.path.exists(
-            os.path.join(self.output_dir, self.METADATA_FN)), "Cannot resume a simulation without metadata."
-        with open(os.path.join(self.output_dir, self.METADATA_FN), "r") as json_file:
+            os.path.join(self.args.directory, self.METADATA_FL)), "Cannot resume a simulation without metadata."
+        with open(os.path.join(self.args.directory, self.METADATA_FL), "r") as json_file:
             metadata_existing = json.load(json_file)
         check_fields_unchanged(metadata_existing, metadata_update, fields=self.preserved_properties)
         metadata = update_numerical_fields(metadata_existing, metadata_update, fields=self.cumulative_properties)
@@ -463,11 +467,22 @@ class OpenMMSimulation:
                 totalSteps=self.args.total_steps,
             )
         )
+        # Reporter to print info to self.LOG_FL
+        self.simulation.simulation.reporters.append(
+            app.StateDataReporter(
+                os.path.join(self.args.directory, 'self.LOG_FL'),
+                self.args.steps_per_save,
+                progress=True,  # Info to print. Add anything you want here.
+                remainingTime=True,
+                speed=True,
+                totalSteps=self.args.total_steps,
+            )
+        )
         # Reporter to log info to csv
         if self.args.state_data:
             self.simulation.simulation.reporters.append(
                 app.StateDataReporter(
-                    os.path.join(self.output_dir, self.STATE_DATA_FN),
+                    os.path.join(self.args.directory, self.STATE_DATA_FL),
                     self.args.steps_per_save,
                     step=True,
                     time=True,
@@ -487,7 +502,7 @@ class OpenMMSimulation:
         # (Saves only a subset of atoms to the trajectory, ignores water)
         self.simulation.simulation.reporters.append(
             app.DCDReporter(
-                os.path.join(self.output_dir, self.TRAJECTORY_FN),
+                os.path.join(self.args.directory, self.TRAJECTORY_FL),
                 reportInterval=self.args.steps_per_save,
                 append=True if self.args.resume else False,
             )
@@ -496,17 +511,17 @@ class OpenMMSimulation:
         # Reporter to save regular checkpoints
         self.simulation.simulation.reporters.append(
             app.CheckpointReporter(
-                os.path.join(self.output_dir, self.CHECKPOINT_FN),
+                os.path.join(self.args.directory, self.CHECKPOINT_FL),
                 self.args.steps_per_save,
             )
         )
 
     def _save_final_checkpoint_and_endstate(self):
         self.simulation.simulation.saveCheckpoint(
-            os.path.join(self.output_dir, self.CHECKPOINT_FN)
+            os.path.join(self.args.directory, self.CHECKPOINT_FL)
         )
         self.simulation.simulation.saveState(
-            os.path.join(self.output_dir, "end_state.xml")
+            os.path.join(self.args.directory, "end_state.xml")
         )
 
     def _make_summary_statistics(self, report):
@@ -540,7 +555,7 @@ class OpenMMSimulation:
             statistics["dD"] = report["Density (g/mL)"].std() / np.sqrt(
                 self.args.duration / self.args.savefreq
             )
-        with open(os.path.join(self.output_dir, "summary_statistics.json"), "w") as f:
+        with open(os.path.join(self.args.directory, "summary_statistics.json"), "w") as f:
             json.dump(statistics, f)
 
     #  ================================== PARSER FUNCTIONS ===================================
@@ -697,15 +712,13 @@ class OpenMMSimulation:
         Check that the simulation arguments are valid.
         """
         if self.args.forcefield not in self.valid_force_fields:
-            print(
-                f"Error: Invalid forcefield: {self.args.forcefield}, must be {self.valid_force_fields}"
-            )
+            printlog(
+                f"Error: Invalid forcefield: {self.args.forcefield}, must be {self.valid_force_fields}", os.path.join(self.args.directory, self.LOG_FL))
             quit()
 
         if (self.args.watermodel is not None) and (self.args.watermodel not in self.valid_water_models):
-            print(
-                f"Error: Invalid water model: {self.args.watermodel}, must be {self.valid_water_models}."
-            )
+            printlog(
+                f"Error: Invalid water model: {self.args.watermodel}, must be {self.valid_water_models}.", os.path.join(self.args.directory, self.LOG_FL))
             quit()
 
         if (self.args.watermodel is not None) and (self.args.watermodel != "tip3p"):
@@ -714,9 +727,8 @@ class OpenMMSimulation:
         if self.args.resume is not None and not os.path.isdir(
                 self.args.resume
         ):
-            print(
-                f"Error: Production directory to resume is not a directory: {self.args.resume}."
-            )
+            printlog(
+                f"Error: Production directory to resume is not a directory: {self.args.resume}.", os.path.join(self.args.directory, self.LOG_FL))
             quit()
 
         if self.args.resume is not None and self.args.plumed is not None:
@@ -725,47 +737,42 @@ class OpenMMSimulation:
 
         if ((self.args.num_water is not None) or (self.args.ionic_strength is not None)
             or (self.args.solventpadding is not None)) and (self.args.watermodel is None):
-            print(
-                f"Error: Must specify a water model to add water and ions or introduce solvent padding."
-            )
+            printlog(
+                f"Error: Must specify a water model to add water and ions or introduce solvent padding.", os.path.join(self.args.directory, self.LOG_FL))
             quit()
 
         if self.args.num_water is not None and self.args.solventpadding is not None:
-            print(
-                f"Error: Cannot specify both number of water molecules and solvent padding."
-            )
+            printlog(
+                f"Error: Cannot specify both number of water molecules and solvent padding.", os.path.join(self.args.directory, self.LOG_FL))
             quit()
 
         if self.args.equilibrate not in self.valid_ensembles:
-            print(
-                f"Error: Invalid ensemble: {self.args.equilibrate}, must be {self.valid_ensembles}"
-            )
+            printlog(
+                f"Error: Invalid ensemble: {self.args.equilibrate}, must be {self.valid_ensembles}", os.path.join(self.args.directory, self.LOG_FL))
             quit()
 
         if self.args.equilibrate == "NPT" and self.args.pressure is None:
-            print(
-                f"Error: Invalid ensemble: {self.args.equilibrate}, must specify pressure."
-            )
+            printlog(
+                f"Error: Invalid ensemble: {self.args.equilibrate}, must specify pressure.", os.path.join(self.args.directory, self.LOG_FL))
             quit()
 
         if self.args.resume:
             resume_contains = os.listdir(self.args.resume)
             resume_requires = (
-                self.CHECKPOINT_FN,
-                self.TRAJECTORY_FN,
-                self.STATE_DATA_FN,
-                self.METADATA_FN,
+                self.CHECKPOINT_FL,
+                self.TRAJECTORY_FL,
+                self.STATE_DATA_FL,
+                self.METADATA_FL,
             )
 
             if not all(filename in resume_contains for filename in resume_requires):
-                print(
-                    f"Error: Production directory to resume must contain files with the following names: {resume_requires}"
-                )
+                printlog(
+                    f"Error: Production directory to resume must contain files with the following names: {resume_requires}", os.path.join(self.args.directory, self.LOG_FL))
                 quit()
 
         self._additional_checks()
-
-        print("[✓] Checked arguments")
+        print(self.args.directory, self.LOG_FL)
+        printlog("[✓] Checked arguments", os.path.join(self.args.directory, self.LOG_FL))
 
 
 class PDBSimulation(OpenMMSimulation):
@@ -799,7 +806,7 @@ class PDBSimulation(OpenMMSimulation):
         model.writeFile(
             modeller.getTopology(),
             modeller.getPositions(),
-            open(os.path.join(self.output_dir, f"{topology_name}"), "w"),
+            open(os.path.join(self.args.directory, f"{topology_name}"), "w"),
         )
         # If water in the system, then save an additional topology file with without water:
         if self.args.watermodel:
@@ -808,13 +815,13 @@ class PDBSimulation(OpenMMSimulation):
             model.writeFile(
                 modeller_copy.getTopology(),
                 modeller_copy.getPositions(),
-                open(os.path.join(self.output_dir, f"{no_water_topology_name}"), "w"),
+                open(os.path.join(self.args.directory, f"{no_water_topology_name}"), "w"),
             )
             del modeller_copy
 
     def _additional_checks(self):
         if self.args.pdb is None:
-            print("Error: Must provide a PDB file.")
+            printlog("Error: Must provide a PDB file.", os.path.join(self.args.directory, self.LOG_FL))
             quit()
 
 
@@ -853,16 +860,16 @@ class MOL2Simulation(OpenMMSimulation):
             assert self.args.xml is not None, "Specifying a mol2 file requires an xml file (and vice versa)."
 
         if self.args.equilibrate == "NPT":
-            print("Error: NPT equilibration ensemble is not currently supported for MOL2 simulations.")
+            printlog("Error: NPT equilibration ensemble is not currently supported for MOL2 simulations.", os.path.join(self.args.directory, self.LOG_FL))
             quit()
 
         if self.args.pressure not in ["", None]:
-            print("Error: Specifying a pressure is not currently supported for MOL2 simulations.")
+            printlog("Error: Specifying a pressure is not currently supported for MOL2 simulations.", os.path.join(self.args.directory, self.LOG_FL))
             quit()
 
         if self.args.cutoffmethod != "NoCutoff":
-            print(
-                "Error: Specifying a cutoff method other than 'NoCutoff' is not currently supported for MOL2 simulations.")
+            printlog(
+                "Error: Specifying a cutoff method other than 'NoCutoff' is not currently supported for MOL2 simulations.", os.path.join(self.args.directory, self.LOG_FL))
             quit()
 
 # TODO: Implement without requirement to specify a PDB file
@@ -892,12 +899,12 @@ class MLSimulation(OpenMMSimulation):
         # Check that each ml_residue is present in the topology
         for residue in self.args.ml_residues:
             if residue not in [atom.residue.name for atom in modeller.topology.atoms()]:
-                print(f"Error: Residue {residue} not present in the topology.")
+                printlog(f"Error: Residue {residue} not present in the topology.", os.path.join(self.args.directory, self.LOG_FL))
                 quit()
 
         # Identify the subset of atoms to be modelled with the ML (ani2x) potential
         ml_atoms = [atom.index for atom in modeller.topology.atoms() if atom.residue.name in self.args.ml_residues]
-        print(f"ML atoms: {ml_atoms}")
+        printlog(f"ML atoms: {ml_atoms}", os.path.join(self.args.directory, self.LOG_FL))
 
         # Initialise the ML potential
         potential = MLPotential('ani2x')
@@ -909,15 +916,15 @@ class MLSimulation(OpenMMSimulation):
 
     def _additional_checks(self):
         if self.args.ml_residues is None:
-            print("Error: Must specify the residues to be modelled with the ML potential.")
+            printlog("Error: Must specify the residues to be modelled with the ML potential.", os.path.join(self.args.directory, self.LOG_FL))
             quit()
 
         if self.args.sdf is None:
-            print("Error: Must specify the sdf file.")
+            printlog("Error: Must specify the sdf file.", os.path.join(self.args.directory, self.LOG_FL))
             quit()
 
         if self.args.pdb is None:
-            print("Error: Must provide a PDB file.")
+            printlog("Error: Must provide a PDB file.", os.path.join(self.args.directory, self.LOG_FL))
             quit()
 
     def _write_updated_model(self, model: Union[app.PDBFile, Dict2Class], modeller: app.Modeller,
@@ -926,7 +933,7 @@ class MLSimulation(OpenMMSimulation):
         model.writeFile(
             modeller.getTopology(),
             modeller.getPositions(),
-            open(os.path.join(self.output_dir, f"{topology_name}"), "w"),
+            open(os.path.join(self.args.directory, f"{topology_name}"), "w"),
         )
         # If water in the system, then save an additional topology file with without water:
         if self.args.watermodel:
@@ -935,6 +942,6 @@ class MLSimulation(OpenMMSimulation):
             model.writeFile(
                 modeller_copy.getTopology(),
                 modeller_copy.getPositions(),
-                open(os.path.join(self.output_dir, f"{no_water_topology_name}"), "w"),
+                open(os.path.join(self.args.directory, f"{no_water_topology_name}"), "w"),
             )
             del modeller_copy

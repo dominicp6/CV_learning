@@ -155,7 +155,7 @@ def init_features(exp, features: Optional[Union[dict, list[str], np.array]], cos
     )
 
 
-def load_metad_bias(exp, bias_file: str, col_idx: int = 2) -> tuple(list, list):
+def load_metad_bias(exp, bias_file: str, col_idx: int = 2):
     """
     Loads the bias potential trajectory from a metadynamics bias file.
     """
@@ -406,7 +406,7 @@ def create_plumed_metadynamics_script(
         )
     else:
         # Check if CVs are valid
-        exp._check_valid_cvs(CVs)
+        check_valid_cvs(exp, CVs)
 
         # Initialise PLUMED script
         file_name = "./plumed.dat" if filename is None else f"{filename}"
@@ -614,6 +614,28 @@ def heatmap_fes(beta: unit.Quantity, ax, bias_traj: BiasTrajectory):
 
     # Plot heatmap of Z
     im = ax.imshow(Z, extent=[x.min(),x.max(),y.min(),y.max()], origin='lower', cmap='RdBu_r')
+
+    return ax, im
+
+def slice_fes(beta: unit.Quantity, ax, bias_traj: BiasTrajectory, dim=0, label=None, color=None):
+    """
+    Plots a slice of the free energy surface in the specified dimension.
+    """
+    xyz = remove_nans(np.column_stack((bias_traj.feat1, bias_traj.feat2, bias_traj.free_energy)))
+    x = xyz[:, 0]
+    y = xyz[:, 1]
+    free_energy = xyz[:, 2] 
+    X,Y = np.meshgrid(np.linspace(x.min(),x.max(),100),np.linspace(y.min(),y.max(),100))
+    Z = griddata((x,y),free_energy,(X,Y),method='cubic')
+
+    if dim == 0:
+        z = - beta * np.log(np.sum(np.exp(-beta*Z), axis=0)/np.sum(np.exp(-beta*Z)))
+        im = ax.plot(Y[:,0], z, label=label, c=color)
+    elif dim == 1:
+        z = - beta * np.log(np.sum(np.exp(-beta*Z), axis=1)/np.sum(np.exp(-beta*Z)))
+        im = ax.plot(X[0,:], z, label=label, c=color)
+    else:
+        raise ValueError("dim must be either 0 or 1")
 
     return ax, im
 

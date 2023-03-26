@@ -27,6 +27,12 @@ def print_file_contents(file: Union[TextIO, str]):
         print(file.read())
 
 
+def printlog(message: str, log_file: str):
+    print(message)
+    with open(log_file, 'a') as f:
+        print(message, file=f)
+
+
 def exception_traceback():
     ex_type, ex_value, ex_traceback = sys.exc_info()
 
@@ -181,7 +187,7 @@ def linear_interp_coordinate_data(x_data: npt.NDArray[np.float64], y_data: npt.N
         return float(y_data[-1] + (x_to_evaluate - x_max) * (y_data[-1] - y_data[-2]) / (x_data[-1] - x_data[-2]))
 
 
-def gaussian_smooth(x: np.array, y: np.array, dx: float, sigma: float) -> tuple(np.array, np.array):
+def gaussian_smooth(x: np.array, y: np.array, dx: float, sigma: float):
     interp = interpolate.interp1d(x, y, fill_value='extrapolate')
     interpolated_x = np.arange(min(x), max(x)+dx/2, dx)
     sigma_gaussian = sigma / dx

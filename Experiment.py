@@ -10,6 +10,8 @@
 import os
 import copy
 import re
+import math
+import subprocess
 from time import time
 from typing import Union, Optional
 
@@ -31,7 +33,7 @@ import pydiffmap.diffusion_map as dfm
 from utils.plot_utils import voronoi_plot_2d
 from utils.experiment_utils import BiasTrajectory, scatter_fes, get_feature_ids_from_names, \
     reweight_biased_fes, generate_fes, set_fes_cbar_and_axis, check_fes_arguments, init_metadata, init_datafiles, \
-    init_biasfiles, init_features
+    init_biasfiles, init_features, get_fe_trajs, slice_fes, check_feature_is_cv_feature
 from utils.general_utils import supress_stdout, assert_kwarg
 from utils.openmm_utils import time_to_iteration_conversion
 from utils.plotting_functions import init_plot, init_multiplot, save_fig
@@ -111,6 +113,42 @@ class Experiment:
         self.CVs = {"PCA": None, "TICA": None, "VAMP": None, "DMD": None, "DM": None}
         # self.kre = KramersRateEvaluator()
         self.discrete_traj = None
+    
+    def hills_reweight(self, stride=6000):
+        """Reweights the biased trajectory using PLUMED's sum_hills function"""
+        os.chdir(self.location)
+        if not os.path.exists("fes_convergence"):
+            os.mkdir("fes_convergence")
+            subprocess.call(f"plumed sum_hills --hills HILLS  --stride {stride} --outfile {self.location}/fes_convergence/fes --mintozero", shell=True)
+        else:
+            print("FES already calculated")
+
+    def plot_fes_convergence(self, stride=3000):
+        self.hills_reweight(stride=stride)
+        fes_convergence_path = os.path.join(self.location, "fes_convergence")
+        fig, panel_axes = init_multiplot(nrows=1, ncols=2, title="Free Energy Convergence", panels=['0,0', '0,1'])
+        directory = os.listdir(fes_convergence_path)
+        colors = plt.cm.get_cmap('Blues', len(directory))
+        for i, file in enumerate(directory):
+            data = np.genfromtxt(os.path.join(fes_convergence_path, file), autostrip=True)
+            fe_traj = get_fe_trajs(data, reweight=False, file_type='fes')
+            fe = fe_traj[2] - min(fe_traj[2])
+            traj = BiasTrajectory(fe_traj[0], fe_traj[1], fe)
+            color = colors(i)
+            if i == 0:
+                label = stride * self.savefreq
+            elif i == len(directory) - 1:
+                label = stride * self.savefreq * len(directory)
+            else:
+                label = None
+            ax1, im1 = slice_fes(self.beta, panel_axes[0], traj, dim=0, color=color, label=label)
+            ax2, im2 = slice_fes(self.beta, panel_axes[1], traj, dim=1, color=color, label=label)
+                
+        ax1.set_xlabel('CV 1')
+        ax2.set_xlabel('CV 2')
+        ax1.legend()
+        ax2.legend()
+        plt.show()
 
     def get_features(self):
         return self.featurizer.describe()
@@ -147,7 +185,7 @@ class Experiment:
             feature_traj = self.get_feature_trajs_from_names(features)[:int(data_fraction * self.num_frames)]
             ax, im = scatter_fes(self.beta, ax, feature_traj, bins, nan_threshold)
         
-        cbar = set_fes_cbar_and_axis(ax, im, feature_nicknames)
+        cbar = set_fes_cbar_and_axis(im, ax, feature_nicknames)
 
         if landmark_points:
             for point, coordinates in landmark_points.items():
@@ -379,14 +417,14 @@ class Experiment:
     ) -> np.array:
 
         # If the feature is a CV then it must be of the form "CVdim" e.g. "TICA0" or "PCA2"
-        cv_features = [self._check_feature_is_cv_feature(feature_name) for feature_name in feature_names]
+        cv_features = [check_feature_is_cv_feature(self, feature_name) for feature_name in feature_names]
 
         # If any of the features are CVs, then we need to get the CVs from the Experiment object
         if any(cv_features):
             assert all(cv_features), "If any of the features are CVs, then all features must be CVs."
             feature_trajs = []
             for feature_name in feature_names:
-                match = self._check_feature_is_cv_feature(feature_name)
+                match = check_feature_is_cv_feature(self, feature_name)
                 matched_string = match.group(1)
                 matched_number = int(re.findall(r"\d+", feature_name)[0])
                 print(matched_string, matched_number)

@@ -8,6 +8,7 @@ import pandas as pd
 
 from utils.openmm_utils import parse_quantity, SystemArgs, cutoff_method, add_barostat, \
     get_integrator, make_graphs
+from utils.general_utils import printlog
 
 
 class EquilibrationProtocol:
@@ -51,9 +52,9 @@ class EquilibrationProtocol:
         for simulation_id, equilibration_simulation in enumerate(self.simulation_sequence):
             simulation_type = equilibration_simulation[0]
             duration = equilibration_simulation[1]
-            print(f"[✓] Running {duration} {simulation_type} equilibration simulation")
+            printlog(f"[✓] Running {duration} {simulation_type} equilibration simulation", os.path.join(self.output_dir, "output.log"))
             self._run_simulation(simulation_type, duration, simulation_id, len(self.simulation_sequence)-1)
-            print(f"[✓] Finished equilibration simulation {simulation_id+1}/{len(self.simulation_sequence)}")
+            printlog(f"[✓] Finished equilibration simulation {simulation_id+1}/{len(self.simulation_sequence)}", os.path.join(self.output_dir, "output.log"))
 
     def _run_simulation(self, simulation_type: str, duration: str, simulation_id: int = 0, max_simulation_id: int = 0):
         duration = parse_quantity(duration)
