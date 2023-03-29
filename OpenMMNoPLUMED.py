@@ -224,7 +224,7 @@ class OpenMMSimulation:
             self.simulation.simulation.loadCheckpoint(os.path.join(self.args.directory, f"equilibration_final.chk"))
             printlog("[✓] Loaded checkpoint file", os.path.join(self.args.directory, self.LOG_FL))
         self.simulation.simulation.step(self.args.total_steps)
-        printlog("[✓] Finished production", os.path.join(self.args.directorytory, self.LOG_FL))
+        printlog("[✓] Finished production", os.path.join(self.args.directory, self.LOG_FL))
         self._save_final_checkpoint_and_endstate()
         printlog("[✓] Saved final checkpoint", os.path.join(self.args.directory, self.LOG_FL))
 
@@ -328,7 +328,7 @@ class OpenMMSimulation:
                 simulation_files = self.required_files.intersection(files_in_dir)
                 if len(simulation_files) > 0:
                     printlog(f"Output directory {output_dir} already exists and has simulation files:", os.path.join(self.args.directory, self.LOG_FL))
-                    [print(file) for file in simulation_files]
+                    [printlog(file, os.path.join(self.args.directory, self.LOG_FL)) for file in simulation_files]
                     printlog("Please choose a different output directory or delete the existing files.", os.path.join(self.args.directory, self.LOG_FL))
                     sys.exit(1)
                 else:
@@ -470,12 +470,13 @@ class OpenMMSimulation:
         # Reporter to print info to self.LOG_FL
         self.simulation.simulation.reporters.append(
             app.StateDataReporter(
-                os.path.join(self.args.directory, 'self.LOG_FL'),
+                os.path.join(self.args.directory, self.LOG_FL),
                 self.args.steps_per_save,
                 progress=True,  # Info to print. Add anything you want here.
                 remainingTime=True,
                 speed=True,
                 totalSteps=self.args.total_steps,
+                append=True,
             )
         )
         # Reporter to log info to csv
@@ -771,7 +772,6 @@ class OpenMMSimulation:
                 quit()
 
         self._additional_checks()
-        print(self.args.directory, self.LOG_FL)
         printlog("[✓] Checked arguments", os.path.join(self.args.directory, self.LOG_FL))
 
 

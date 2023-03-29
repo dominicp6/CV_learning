@@ -10,9 +10,9 @@ simulation_params = {
     'resume': None,
     'PLUMED': None,
     'gpu': '0',
-    'duration': '200ps',
-    'savefreq': '10fs',
-    'stepsize': '0.1fs',
+    'duration': '50ps',
+    'savefreq': '0.5fs',   # failed with 200fs, worked with 225fs
+    'stepsize': '0.002fs',
     'temperature': '298K',
     'pressure': '1bar',
     'frictioncoeff':  '1ps',
@@ -25,7 +25,7 @@ simulation_params = {
     'seed': None,
     'directory': os.path.join(absolute_path, 'MLIRexp'),
     'equilibrate':  'NPT',
-    'equilibration_length': '0.001ns',
+    'equilibration_length': '10ps',
     'integrator': 'Verlet',
     'num_water': 1000,
     'ionic_strength': '0.15mol',
@@ -49,6 +49,6 @@ if __name__ == '__main__':
         simulation_params['sdf'] = os.path.join(absolute_path, f'chemicals/nw_sdf/{system}ideal.sdf')
         simulation_params['ml_residues'] = f'{system}'
         simulation_params['num_water'] = NUM_WATER[system]
-        simulation_params['name'] = f'{system}_test_ani2'
+        simulation_params['name'] = f'{system}_0.5fs_ani2'
         simulation = MLSimulation().from_args(args=simulation_params)
         simulation.run()

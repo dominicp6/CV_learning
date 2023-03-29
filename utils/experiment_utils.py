@@ -21,7 +21,6 @@ from typing import Union
 import matplotlib.pyplot as plt
 from scipy.interpolate import SmoothBivariateSpline, griddata
 
-import dill
 import numpy as np
 
 from utils.general_utils import select_file_option, check_if_memory_available, remove_nans, print_file_contents
@@ -29,9 +28,8 @@ from Dihedrals import Dihedrals, compute_dihedral_label
 from utils.feature_utils import get_cv_type_and_dim, get_feature_means
 from utils.diffusion_utils import free_energy_estimate_2D
 from utils.openmm_utils import parse_quantity
+from utils.biased_experiment_utils import BiasTrajectory, get_fe_trajs
 
-
-BiasTrajectory = namedtuple("BiasTrajectory", "feat1 feat2 free_energy")
 
 # ====================== INIT UTILS =================================
 def init_metadata(location: str, keyword="metadata"):
@@ -276,27 +274,6 @@ def get_metadata_file(
     selected_metadata = metadata_files[selection]
 
     return selected_metadata
-
-
-def get_fe_trajs(data, reweight=False, file_type="fes"):
-    """
-    Get feature and free energy trajectories from the data array.
-    """
-    # Different column orders for reweighted and non-reweighted data
-    if reweight:
-        delta_idx = 1
-    else:
-        delta_idx = 0
-    feature1_traj = data[:, 0+delta_idx]
-    feature2_traj = data[:, 1+delta_idx]
-    if file_type is "fes":
-        fe = data[:, 2+delta_idx]
-        fe = fe - np.min(fe)
-    elif file_type is "COLVAR":
-        fe = data[:, 2+delta_idx]
-        fe = np.max(fe) - fe
-
-    return feature1_traj, feature2_traj, fe
 
 
 def check_feature_is_cv_feature(exp, feature: str):
@@ -617,28 +594,6 @@ def heatmap_fes(beta: unit.Quantity, ax, bias_traj: BiasTrajectory):
 
     return ax, im
 
-def slice_fes(beta: unit.Quantity, ax, bias_traj: BiasTrajectory, dim=0, label=None, color=None):
-    """
-    Plots a slice of the free energy surface in the specified dimension.
-    """
-    xyz = remove_nans(np.column_stack((bias_traj.feat1, bias_traj.feat2, bias_traj.free_energy)))
-    x = xyz[:, 0]
-    y = xyz[:, 1]
-    free_energy = xyz[:, 2] 
-    X,Y = np.meshgrid(np.linspace(x.min(),x.max(),100),np.linspace(y.min(),y.max(),100))
-    Z = griddata((x,y),free_energy,(X,Y),method='cubic')
-
-    if dim == 0:
-        z = - beta * np.log(np.sum(np.exp(-beta*Z), axis=0)/np.sum(np.exp(-beta*Z)))
-        im = ax.plot(Y[:,0], z, label=label, c=color)
-    elif dim == 1:
-        z = - beta * np.log(np.sum(np.exp(-beta*Z), axis=1)/np.sum(np.exp(-beta*Z)))
-        im = ax.plot(X[0,:], z, label=label, c=color)
-    else:
-        raise ValueError("dim must be either 0 or 1")
-
-    return ax, im
-
 
 def generate_fes(beta, ax, bias_traj, plot_type="contour"):
     """
@@ -669,7 +624,7 @@ def reweight_biased_fes(location, feature_nicknames, ax, beta, plot_type="contou
     execute_reweighting_script(location, 'trajectory.dcd', 'plumed_reweight.dat', kT=1/beta._value)
     bias_traj = load_reweighted_trajectory(location)
 
-    return generate_fes(beta, ax, bias_traj, plot_type=plot_type)
+    return generate_fes(beta, ax, bias_traj, plot_type=plot_type), bias_traj
 
 
 def set_fes_cbar_and_axis(im, ax, feature_nicknames):

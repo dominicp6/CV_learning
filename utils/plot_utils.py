@@ -15,6 +15,8 @@ import numpy as np
 from scipy.signal import find_peaks
 import numpy.typing as npt
 import networkx as nx
+from scipy.interpolate import SmoothBivariateSpline
+from sklearn.cluster import DBSCAN
 
 from utils.diffusion_utils import (
     free_energy_estimate,
@@ -24,6 +26,105 @@ from utils.diffusion_utils import (
 # from MarkovStateModel import MSM
 
 type_kramers_rates = list[tuple[tuple[int, int], float]]
+
+
+def find_turning_points_interpolation(x, y, z, gradient_threshold=0.15, clustering_eps=0.05, show_plots=False, ax = None, interpolate_cluster_values=False):
+    """
+    Find the turning points of a 2D surface using interpolation.
+    """
+    # Interpolate the z surface with a 2D interpolation function
+    interp_func = SmoothBivariateSpline(x, y, z, kx=3, ky=3)
+
+    # Create a grid of points to evaluate the interpolation function
+    X,Y = np.meshgrid(np.linspace(x.min(),x.max(),2500),np.linspace(y.min(),y.max(),2500))
+    X = X.flatten()
+    Y = Y.flatten()
+
+    # Calculate the gradients of the z surface using the interpolation function
+    fx = interp_func(X, Y, dx=1, dy=0, grid=False)
+    fy = interp_func(X, Y, dx=0, dy=1, grid=False)
+
+    if show_plots:
+        plt.plot(fx**2 + fy**2)
+        plt.yscale('log')
+        plt.show()
+
+    # Find candidate turning points by finding the points where the gradient is below a threshold
+    if show_plots:
+        num_candidates = []
+        for threshold in np.linspace(0.01, 0.25, 100):
+            candidates = np.where(np.sqrt(fx**2 + fy**2) < threshold)[0]
+            num_candidates.append(len(candidates))
+        plt.plot(np.linspace(0.01, 0.25, 100), num_candidates)
+        plt.show()
+
+    candidates = np.where(np.sqrt(fx**2 + fy**2) < gradient_threshold)[0]
+
+    # Cluster the candidate turning points to remove any that are too close to each other
+    candidate_turning_points = np.array([[X[i], Y[i]] for i in candidates])
+    clustering = DBSCAN(eps=clustering_eps, min_samples=1).fit(candidate_turning_points)
+    labels = clustering.labels_
+
+    turning_points = []
+    for label in np.unique(labels):
+        # Skip any points that are not part of a cluster
+        if label == -1:
+            print("[Notice] Isolated point found. Skipping...")
+        # Find the points in the cluster
+        cluster_indices = np.where(labels == label)[0]
+        cluster_points = candidate_turning_points[cluster_indices]
+
+        if interpolate_cluster_values:
+            # Interpolate the z value at each point in the cluster
+            cluster_values = interp_func(cluster_points[:, 0], cluster_points[:, 1], grid=False)
+        else:
+            cluster_values = []
+            for point in cluster_points:
+                # Find the closest (x,y) coordinate for each point in the cluster
+                closest_point_idx = np.argmin(np.linalg.norm(np.array([x, y]).T - point, axis=1))
+                # Find the z value at the closest (x,y) coordinate
+                z_value = z[closest_point_idx]
+                cluster_values.append(z_value)
+            cluster_values = np.array(cluster_values)
+
+        mean_point = np.mean(cluster_points, axis=0)
+        # Compute the Hessian matrix of the z surface at the mean point
+        fxx = interp_func(mean_point[0], mean_point[1], dx=2, dy=0)
+        fyy = interp_func(mean_point[0], mean_point[1], dx=0, dy=2)
+        fxy = interp_func(mean_point[0], mean_point[1], dx=1, dy=1)
+        hessian = np.array([[fxx, fxy], [fxy, fyy]])
+        eigenvalues = np.linalg.eigvals(hessian)
+        # If the Hessian matrix has all negative eigenvalues, the point is a maximum
+        if np.all(eigenvalues < 0):
+            # Choose the point with the highest z value
+            turning_points.append((cluster_points[np.argmax(cluster_values)], max(cluster_values), 'maximum'))
+        # If the Hessian matrix has all positive eigenvalues, the point is a minimum
+        elif np.all(eigenvalues > 0):
+            # Choose the point with the lowest z value
+            turning_points.append((cluster_points[np.argmin(cluster_values)], min(cluster_values), 'minimum'))
+        else:
+            turning_points.append((mean_point, interp_func(mean_point[0], mean_point[1], grid=False), 'saddle'))
+
+    # Sort the turning points by their corresponding values
+    turning_points.sort(key=lambda x: x[1])
+
+    # Plot the turning points
+    max_coords = np.array([x for x, _, _ in turning_points if _ == 'maximum'])
+    min_coords = np.array([x for x, _, _ in turning_points if _ == 'minimum'])
+    saddle_coords = np.array([x for x, _, _ in turning_points if _ == 'saddle'])
+    if ax is not None:
+        ax.scatter(max_coords[:, 0], max_coords[:, 1], c='r', label='maximum', zorder=2)
+        ax.scatter(min_coords[:, 0], min_coords[:, 1], c='b', label='minimum', zorder=2)
+        ax.scatter(saddle_coords[:, 0], saddle_coords[:, 1], c='g', label='saddle', zorder=2)
+        ax.legend()
+    if show_plots:
+            plt.scatter(max_coords[:, 0], max_coords[:, 1], c='r', label='maximum')
+            plt.scatter(min_coords[:, 0], min_coords[:, 1], c='b', label='minimum')
+            plt.scatter(saddle_coords[:, 0], saddle_coords[:, 1], c='g', label='saddle')
+            plt.legend()
+            plt.show()
+
+    return turning_points, ax
 
 
 # Source: SciPy
